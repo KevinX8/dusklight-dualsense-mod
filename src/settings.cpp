@@ -24,6 +24,7 @@ enum Tab { TabHaptics, TabSpeaker, TabLights, TabTriggers, TabCount };
 
 const char* const kRumbleModes[] = {"Haptic buzz", "Original motors", "Off"};
 const char* const kLightbarModes[] = {"Off", "Health", "Health + form"};
+const char* const kSpeakerRoutes[] = {"Controller speaker", "Headphone jack", "Both"};
 const char* const kSpeakerModes[] = {"Also on TV", "Only on controller"};
 const char* const kPlayerLeds[] = {"Off", "Hearts", "Lantern oil"};
 
@@ -87,6 +88,10 @@ const Def kDefs[OptCount] = {
     {"speakerMode", Select, SpeakerMirror, nullptr, TabSpeaker, nullptr, "Where they play",
      "Also on TV: the sound plays on both. Only on controller: it is taken out of the TV mix.",
      0, 0, 1, nullptr, kSpeakerModes, 2},
+    {"speakerRoute", Select, 0, nullptr, TabSpeaker, nullptr, "Output",
+     "Where the controller plays these sounds. Both: the speaker and headphones plugged into "
+     "the controller at once.",
+     0, 0, 1, nullptr, kSpeakerRoutes, 3},
     {"spkMidnaCall", Bool, 1, nullptr, TabSpeaker, "Sounds", "Midna calling",
      "Midna's call and the Z-button blink when she has something to say."},
     {"spkMidnaVoice", Bool, 1, nullptr, TabSpeaker, nullptr, "Midna's voice",

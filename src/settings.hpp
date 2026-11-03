@@ -32,6 +32,7 @@ enum Opt : int {
     SpeakerEnabled,
     SpeakerVolume,
     SpeakerMode,
+    SpeakerRoute,
     SpkMidnaCall,
     SpkMidnaVoice,
     SpkWiiRemote,

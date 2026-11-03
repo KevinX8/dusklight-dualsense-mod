@@ -378,6 +378,7 @@ struct SentState {
     bool trig = false, pad = false, mic = false, led = false, audio = false;
     Trigger left{}, right{};
     u8 padLights = 0, micMode = 0, rgb[3] = {};
+    int64_t route = -1;
 };
 SentState g_sent;
 
@@ -474,11 +475,17 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
     // The controller ignores its audio inputs (speaker and haptic channels) until the host enables
     // audio control and sets the output volumes. Values match DSX's USB haptics setup.
     const bool audio = haptics_stream_open();
-    if (audio && (reassert || !g_sent.audio)) {
+    if (audio && (reassert || !g_sent.audio || g_sent.route != opt(SpeakerRoute))) {
+        // Same as the kernel's speaker setup (hid-playstation, on headphone unplug). Output path
+        // (bits 4-5): 0 = L/R to headphones, 2 = L to headphones + R to speaker, 3 = R to speaker.
+        static constexpr u8 kPaths[] = {3, 0, 2};
+        const int64_t route = std::clamp<int64_t>(opt(SpeakerRoute), 0, 2);
         fx.enableBits1 |= 0x10 | 0x20 | 0x80;  // headphone volume, speaker volume, audio control
+        fx.enableBits2 |= 0x80;                // audio control 2 (speaker preamp)
         fx.headphoneVolume = 0x70;
-        fx.speakerVolume = 0x54;
-        fx.audioEnableBits = 0x00;  // output path: channels 1/2 to headphones/speaker
+        fx.speakerVolume = 0x64;  // accepted range is about 0x3d..0x64
+        fx.audioEnableBits = static_cast<u8>(kPaths[route] << 4);
+        fx.unknown1[5] = 0x02;  // speaker preamp +6 dB
     }
 
     if (reassert) {
@@ -499,6 +506,7 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
     }
     if (fx.enableBits1 & 0x80) {
         g_sent.audio = true;
+        g_sent.route = opt(SpeakerRoute);
     }
     if (fx.enableBits2 & 0x10) {
         g_sent.pad = true;

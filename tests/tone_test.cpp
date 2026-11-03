@@ -23,9 +23,14 @@ int main() {
             if (ds::sdl.GetGamepadVendorForID(pads[i]) == 0x054C) {
                 if (SDL_Gamepad* pad = ds::sdl.OpenGamepad(pads[i])) {
                     ds::Ds5Effects fx{};
+                    // Same as the kernel's speaker setup: route R to the speaker (path 3), speaker
+                    // volume 0x64, speaker preamp +6 dB (audio_control2 @ 37, valid_flag1 bit 7).
                     fx.enableBits1 = 0x10 | 0x20 | 0x80;
+                    fx.enableBits2 = 0x80;
                     fx.headphoneVolume = 0x70;
-                    fx.speakerVolume = 0x54;
+                    fx.speakerVolume = 0x64;
+                    fx.audioEnableBits = 3 << 4;
+                    fx.unknown1[5] = 0x02;
                     std::printf("audio enable report: %s\n",
                         ds::sdl.SendGamepadEffect(pad, &fx, sizeof(fx)) ? "sent" : "FAILED");
                 }

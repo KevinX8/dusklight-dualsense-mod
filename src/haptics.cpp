@@ -151,6 +151,7 @@ VoiceSave g_saves[DSP_CHANNELS];
 int g_saveCount = 0;
 // Diagnostics shown in the mods panel: voices attributed this second and output peaks.
 std::atomic<int> g_dbgRenders = 0;
+std::atomic<int> g_dbgClears = 0;
 std::atomic<int> g_dbgHaptic = 0, g_dbgSpeaker = 0, g_dbgTracked = 0;
 std::atomic<float> g_dbgHapticPeak = 0.0f, g_dbgSpeakerPeak = 0.0f;
 template <class T>
@@ -375,6 +376,7 @@ void emit(const float* l, const float* r, const float* sl, const float* sr) {
     constexpr int kMaxQueued = static_cast<int>(kRate * 0.06f) * 4 * sizeof(float);
     if (sdl.GetAudioStreamQueued(g_stream) > kMaxQueued) {
         sdl.ClearAudioStream(g_stream);
+        g_dbgClears.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -435,6 +437,7 @@ HookAction on_pad_motor(ModContext*, void* args, void*, void*) {
 int g_pollFrames = 0;
 int g_statsFrames = 0;
 int g_statsLogCount = 0;
+bool g_stallWarned = false;
 std::string g_deviceName;
 int64_t g_lastRumbleMode = -1;
 std::string g_lastStatus;
@@ -572,7 +575,20 @@ void haptics_update() {
             g_dbgTracked.exchange(0), pct(g_dbgHapticPeak.exchange(0.0f)),
             pct(g_dbgSpeakerPeak.exchange(0.0f)), g_dbgRenders.exchange(0),
             g_motorOn.load() ? "on" : "off");
-        settings_set_status(stats.c_str());
+        // Normal drift clears a backlog every few seconds at most; many per second means the
+        // controller's USB audio stopped consuming (seen with a stalled PipeWire/ALSA device).
+        const int clears = g_dbgClears.exchange(0);
+        if (clears > 5) {
+            settings_set_status("Controller audio is stalled: nothing is being played. Replug the "
+                                "controller or switch its audio profile off and on again.");
+            if (!g_stallWarned) {
+                mods::log::warn("controller audio output stalled ({} backlog drops/s)", clears);
+                g_stallWarned = true;
+            }
+        } else {
+            g_stallWarned = false;
+            settings_set_status(stats.c_str());
+        }
         if (++g_statsLogCount % 10 == 0) {
             mods::log::info("{}", stats);  // every ~10 s, for remote diagnosis
         }

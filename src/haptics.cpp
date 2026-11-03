@@ -20,11 +20,10 @@ extern const HookService* svc_hook;
 
 #include "JSystem/JAudio2/JAISe.h"
 #include "JSystem/JAudio2/JASChannel.h"
-#include "JSystem/JAudio2/JASCriticalSection.h"
 #include "JSystem/JAudio2/JASDSPChannel.h"
 #include "JSystem/JAudio2/JASTrack.h"
 #include "Z2AudioLib/Z2SeMgr.h"
-#include "dsp_globals.hpp"
+#include "dusk/audio/DuskDsp.hpp"
 #include <dolphin/pad.h>
 
 #include <algorithm>
@@ -37,7 +36,9 @@ extern const HookService* svc_hook;
 #include <string>
 #include <unordered_map>
 
-DEFINE_HOOK(dusk::audio::DspRender, DspRenderHook);
+// src/dusk/ symbols aren't in the Windows/macOS export lists, so everything from the audio engine
+// is reached by name through the symbol manifest instead of linked directly.
+DEFINE_HOOK_SYMBOL("dusk::audio::DspRender", void(dusk::audio::OutputSubframe&), DspRenderHook);
 // Every SE passes through here when started (startTrack_ itself is partly inlined).
 // By name: MSVC can't constant-initialize a member pointer into JAISe (multiple inheritance).
 DEFINE_HOOK_SYMBOL("JAISe::JAISeMgr_startID_",
@@ -49,6 +50,34 @@ DEFINE_HOOK(PADControlMotor, PadControlMotor);
 
 namespace ds {
 namespace {
+
+// Audio engine globals (DuskDsp.hpp), resolved at init. Null if unavailable.
+struct DspGlobals {
+    dusk::audio::ChannelAuxData* channelAux = nullptr;
+    f32* masterVolume = nullptr;
+    f32* prevMasterVolume = nullptr;
+    bool* enableReverb = nullptr;
+    bool* enableHrtf = nullptr;
+    bool* dumpAudio = nullptr;
+    u8* outChannelCount = nullptr;
+    // JASCriticalSection ctor/dtor: the audio thread renders under this lock.
+    void (*lock)(void*) = nullptr;
+    void (*unlock)(void*) = nullptr;
+    bool ok() const {
+        return channelAux && masterVolume && prevMasterVolume && enableReverb && enableHrtf &&
+               dumpAudio && outChannelCount;
+    }
+};
+DspGlobals g_dsp;
+
+void* resolve(const char* name) {
+    void* addr = nullptr;
+    if (svc_hook->resolve(mod_ctx, name, &addr, nullptr) != MOD_OK) {
+        mods::log::warn("symbol '{}' not found", name);
+        return nullptr;
+    }
+    return addr;
+}
 
 using dusk::audio::OutputSubframe;
 constexpr float kRate = static_cast<float>(dusk::audio::SampleRate);
@@ -178,7 +207,8 @@ bool g_anyMoved = false;
 // Runs the original mixer for saved voices with a non-zero gain[out], one pass per distinct gain,
 // adding a stereo downmix to l/r. Leaves those voices advanced; the caller restores them.
 void render_pass(int out, float* l, float* r) {
-    using namespace dusk::audio;
+    using dusk::audio::OutputSubframe;
+    const u8 outChannels = *g_dsp.outChannelCount;
     bool done[DSP_CHANNELS] = {};
     for (int k = 0; k < g_saveCount; ++k) {
         const float gain = g_saves[k].gain[out];
@@ -194,18 +224,18 @@ void render_pass(int out, float* l, float* r) {
                 done[m] = true;
             }
         }
-        MasterVolume = PrevMasterVolume = 1.0f;
+        *g_dsp.masterVolume = *g_dsp.prevMasterVolume = 1.0f;
         OutputSubframe scratch = {};
         DspRenderHook::g_orig(scratch);
         const auto& c = scratch.channels;
-        const bool surround = OutChannelCount > 2;
+        const bool surround = outChannels > 2;
         for (int j = 0; j < kN; ++j) {
             float sl = c[0][j];
             float sr = c[1][j];
             if (surround) {
                 const float center = 0.7f * c[2][j];
-                sl += center + c[4][j] + (OutChannelCount > 6 ? c[6][j] : 0.0f);
-                sr += center + c[5][j] + (OutChannelCount > 6 ? c[7][j] : 0.0f);
+                sl += center + c[4][j] + (outChannels > 6 ? c[6][j] : 0.0f);
+                sr += center + c[5][j] + (outChannels > 6 ? c[7][j] : 0.0f);
             }
             l[j] += sl * gain;
             r[j] += sr * gain;
@@ -220,7 +250,7 @@ void restore_voices(bool keepMoved) {
             continue;
         }
         std::memcpy(&JASDsp::CH_BUF[i], &g_saves[k].channel, sizeof(JASDsp::TChannel));
-        std::memcpy(&dusk::audio::ChannelAux[i], &g_saves[k].aux, sizeof(dusk::audio::ChannelAuxData));
+        std::memcpy(&g_dsp.channelAux[i], &g_saves[k].aux, sizeof(dusk::audio::ChannelAuxData));
     }
 }
 
@@ -279,21 +309,20 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
         atomic_max(g_dbgSpeaker, sp);
     }
 
-    using namespace dusk::audio;
     for (int k = 0; k < g_saveCount; ++k) {
         const int i = g_saves[k].index;
         std::memcpy(&g_saves[k].channel, &JASDsp::CH_BUF[i], sizeof(JASDsp::TChannel));
-        std::memcpy(&g_saves[k].aux, &ChannelAux[i], sizeof(ChannelAuxData));
+        std::memcpy(&g_saves[k].aux, &g_dsp.channelAux[i], sizeof(dusk::audio::ChannelAuxData));
     }
     for (int i = 0; i < DSP_CHANNELS; ++i) {
         g_wasActive[i] = JASDsp::CH_BUF[i].mIsActive;
     }
-    const bool reverb = EnableReverb;
-    const bool hrtf = EnableHrtf;
-    const f32 volume = MasterVolume;
-    const f32 prevVolume = PrevMasterVolume;
-    EnableReverb = false;
-    EnableHrtf = false;
+    const bool reverb = *g_dsp.enableReverb;
+    const bool hrtf = *g_dsp.enableHrtf;
+    const f32 volume = *g_dsp.masterVolume;
+    const f32 prevVolume = *g_dsp.prevMasterVolume;
+    *g_dsp.enableReverb = false;
+    *g_dsp.enableHrtf = false;
 
     if (anyHaptic) {
         render_pass(0, hl, hr);
@@ -313,10 +342,10 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
     for (int i = 0; i < DSP_CHANNELS; ++i) {
         JASDsp::CH_BUF[i].mIsActive = g_moved[i] ? 0 : g_wasActive[i];
     }
-    EnableReverb = reverb;
-    EnableHrtf = hrtf;
-    MasterVolume = volume;
-    PrevMasterVolume = prevVolume;
+    *g_dsp.enableReverb = reverb;
+    *g_dsp.enableHrtf = hrtf;
+    *g_dsp.masterVolume = volume;
+    *g_dsp.prevMasterVolume = prevVolume;
 }
 
 // After the normal mix: moved voices rejoin (their state is already one subframe ahead).
@@ -419,7 +448,7 @@ HookAction on_dsp_render_pre(ModContext*, void*, void*, void*) {
     std::fill(std::begin(g_hr), std::end(g_hr), 0.0f);
     std::fill(std::begin(g_sl), std::end(g_sl), 0.0f);
     std::fill(std::begin(g_sr), std::end(g_sr), 0.0f);
-    if ((opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !dusk::audio::DumpAudio) {
+    if (g_dsp.ok() && (opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !*g_dsp.dumpAudio) {
         shadow_render(g_hl, g_hr, g_sl, g_sr);
     }
     return HOOK_CONTINUE;
@@ -556,6 +585,24 @@ void poll_device() {
 
 ModResult haptics_init(const char* native_dir, ModError* error) {
     const char* source = sdl_load(native_dir);
+
+    g_dsp.channelAux = static_cast<dusk::audio::ChannelAuxData*>(resolve("dusk::audio::ChannelAux"));
+    g_dsp.masterVolume = static_cast<f32*>(resolve("dusk::audio::MasterVolume"));
+    g_dsp.prevMasterVolume = static_cast<f32*>(resolve("dusk::audio::PrevMasterVolume"));
+    g_dsp.enableReverb = static_cast<bool*>(resolve("dusk::audio::EnableReverb"));
+    g_dsp.enableHrtf = static_cast<bool*>(resolve("dusk::audio::EnableHrtf"));
+    g_dsp.dumpAudio = static_cast<bool*>(resolve("dusk::audio::DumpAudio"));
+    g_dsp.outChannelCount = static_cast<u8*>(resolve("dusk::audio::OutChannelCount"));
+#ifdef _MSC_VER
+    g_dsp.lock = reinterpret_cast<void (*)(void*)>(resolve("??0JASCriticalSection@@QEAA@XZ"));
+    g_dsp.unlock = reinterpret_cast<void (*)(void*)>(resolve("??1JASCriticalSection@@QEAA@XZ"));
+#else
+    g_dsp.lock = reinterpret_cast<void (*)(void*)>(resolve("_ZN18JASCriticalSectionC1Ev"));
+    g_dsp.unlock = reinterpret_cast<void (*)(void*)>(resolve("_ZN18JASCriticalSectionD1Ev"));
+#endif
+    if (!g_dsp.ok()) {
+        mods::log::warn("audio engine symbols unavailable; sound-driven haptics and speaker off");
+    }
     mods::log::info("SDL audio: {}; gamepad effects: {}", source,
         sdl.SendGamepadEffect ? "available" : "unavailable");
 
@@ -641,9 +688,15 @@ void haptics_shutdown() {
     {
         // The audio thread renders under this lock: once held, it is not inside our hook, and
         // after the uninstall it can't re-enter it before the library is unloaded.
-        JASCriticalSection section;
+        alignas(16) unsigned char section[16] = {};  // JASCriticalSection has no members on PC
+        if (g_dsp.lock && g_dsp.unlock) {
+            g_dsp.lock(section);
+        }
         mods::hook::uninstall<DspRenderHook>();
         mods::hook::uninstall<TrackChannelStart>();
+        if (g_dsp.lock && g_dsp.unlock) {
+            g_dsp.unlock(section);
+        }
     }
     if (sdl.has_audio()) {
         close_stream();

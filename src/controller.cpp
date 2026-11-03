@@ -17,7 +17,6 @@ extern const HookService* svc_hook;
 #include "d/d_attention.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_kankyo.h"
-#include "dusk/gamepad_color.h"
 #include "haptics.hpp"
 #include <dolphin/pad.h>
 
@@ -29,7 +28,7 @@ extern const HookService* svc_hook;
 DEFINE_HOOK(&Z2SeMgr::seStart, SeStart);
 DEFINE_HOOK(&Z2SeqMgr::subBgmStart, SubBgmStart);
 DEFINE_HOOK(PADSetColor, PadSetColor);
-DEFINE_HOOK(dusk::input::handleGamepadColor, GameGamepadColor);
+DEFINE_HOOK_SYMBOL("dusk::input::handleGamepadColor", void(), GameGamepadColor);
 
 namespace ds {
 namespace {

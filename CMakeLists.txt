@@ -70,3 +70,7 @@ target_include_directories(ds5_test PRIVATE src)
 add_executable(sdl_dyn_test EXCLUDE_FROM_ALL tests/sdl_dyn_test.cpp src/sdl_dyn.cpp)
 target_include_directories(sdl_dyn_test PRIVATE src "${SDL3_INCLUDE_DIR}")
 target_link_libraries(sdl_dyn_test PRIVATE ${CMAKE_DL_LIBS})
+
+add_executable(tone_test EXCLUDE_FROM_ALL tests/tone_test.cpp src/sdl_dyn.cpp)
+target_include_directories(tone_test PRIVATE src "${SDL3_INCLUDE_DIR}")
+target_link_libraries(tone_test PRIVATE ${CMAKE_DL_LIBS})

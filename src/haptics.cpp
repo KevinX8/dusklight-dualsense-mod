@@ -150,6 +150,7 @@ struct VoiceSave {
 VoiceSave g_saves[DSP_CHANNELS];
 int g_saveCount = 0;
 // Diagnostics shown in the mods panel: voices attributed this second and output peaks.
+std::atomic<int> g_dbgRenders = 0;
 std::atomic<int> g_dbgHaptic = 0, g_dbgSpeaker = 0, g_dbgTracked = 0;
 std::atomic<float> g_dbgHapticPeak = 0.0f, g_dbgSpeakerPeak = 0.0f;
 template <class T>
@@ -383,6 +384,7 @@ bool g_shadowRan = false;
 
 HookAction on_dsp_render_pre(ModContext*, void*, void*, void*) {
     g_shadowRan = g_streamOpen.load(std::memory_order_relaxed);
+    g_dbgRenders.fetch_add(1, std::memory_order_relaxed);
     if (!g_shadowRan) {
         return HOOK_CONTINUE;
     }
@@ -432,6 +434,7 @@ HookAction on_pad_motor(ModContext*, void* args, void*, void*) {
 
 int g_pollFrames = 0;
 int g_statsFrames = 0;
+int g_statsLogCount = 0;
 std::string g_deviceName;
 int64_t g_lastRumbleMode = -1;
 std::string g_lastStatus;
@@ -562,12 +565,17 @@ void haptics_update() {
         g_statsFrames = 60;
         const auto pct = [](float v) { return static_cast<int>(v * 100.0f + 0.5f); };
         // Panel only (not logged): live proof that sounds are being picked up and sent.
-        settings_set_status(fmt::format("Active on '{}'. Last second: {} haptic / {} speaker "
-                                        "sounds (of {} tracked), peak {}% / {}%",
+        const std::string stats = fmt::format("Active on '{}'. Last second: {} haptic / {} "
+                                              "speaker sounds (of {} tracked), peak {}% / {}%, "
+                                              "{} renders, motor {}",
             g_deviceName, g_dbgHaptic.exchange(0), g_dbgSpeaker.exchange(0),
             g_dbgTracked.exchange(0), pct(g_dbgHapticPeak.exchange(0.0f)),
-            pct(g_dbgSpeakerPeak.exchange(0.0f)))
-                .c_str());
+            pct(g_dbgSpeakerPeak.exchange(0.0f)), g_dbgRenders.exchange(0),
+            g_motorOn.load() ? "on" : "off");
+        settings_set_status(stats.c_str());
+        if (++g_statsLogCount % 10 == 0) {
+            mods::log::info("{}", stats);  // every ~10 s, for remote diagnosis
+        }
     }
 }
 

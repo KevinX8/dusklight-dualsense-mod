@@ -21,6 +21,7 @@ extern const HookService* svc_hook;
 #include "JSystem/JAudio2/JASCriticalSection.h"
 #include "JSystem/JAudio2/JASDSPChannel.h"
 #include "JSystem/JAudio2/JASTrack.h"
+#include "Z2AudioLib/Z2SeMgr.h"
 #include "dusk/audio/DuskDsp.hpp"
 #include <dolphin/pad.h>
 
@@ -88,88 +89,84 @@ float category_gain(u32 soundId) {
     return static_cast<float>(opt(o)) / 100.0f;
 }
 
+// Sounds that can play on the controller speaker, keyed by sound ID -> the toggle enabling them.
+const std::unordered_map<u32, Opt>& speaker_table() {
+    static const std::unordered_map<u32, Opt> table = [] {
+        std::unordered_map<u32, Opt> t;
+        for (u32 id : {Z2SE_NAVI_CALLVOICE, Z2SE_NAVI_BLINK, Z2SE_NAVI_TALK_START,
+                 Z2SE_NAVI_TALK_END}) {
+            t[id] = SpkMidnaCall;
+        }
+        static const u32 midnaVoice[] = {
+#include "midna_voice.inc"
+        };
+        for (u32 id : midnaVoice) {
+            t[id] = SpkMidnaVoice;
+        }
+        // What the Wii version played on the Wii Remote speaker (Z2AudioCS call sites).
+        for (u32 id : {Z2SE_READ_RIDDLE_A, Z2SE_READ_RIDDLE_B, Z2SE_WOLF_SENSE_OPEN_START,
+                 Z2SE_WOLF_SENSE_CLOSE, Z2SE_AL_REEL_SLOW_LOOP, Z2SE_AL_REEL_FAST_LOOP,
+                 Z2SE_LK_HS_WIND_UP, Z2SE_LK_HS_WIND_UP_FIN, Z2SE_SWORD_POWER_COME,
+                 Z2SE_WOLF_POWER_COME, Z2SE_BOOM_POWER_RESUME, Z2SE_BOOM_TORNADO,
+                 Z2SE_AL_SPINNER_RAIL, Z2SE_WOLFATTACK_WIND_RUSH}) {
+            t[id] = SpkWiiRemote;
+        }
+        for (u32 id : {Z2SE_AL_DRAW_BOW, Z2SE_OBJ_ARROW_DRAW_NORMAL, Z2SE_OBJ_ARROW_SHOT_NORMAL,
+                 Z2SE_OBJ_ARROW_SHOT_GAIN, Z2SE_OBJ_ARROW_SHOT_FIRE, Z2SE_OBJ_ARROWBOMB_SHOT,
+                 Z2SE_AL_ARROW_EMPTY, Z2SE_AL_PACHINKO_DRAW, Z2SE_AL_PACHINKO_SHOT,
+                 Z2SE_HIT_ARROW_STICK, Z2SE_HIT_ARROW_REBOUND}) {
+            t[id] = SpkBow;
+        }
+        for (u32 id : {Z2SE_GREEN_LUPY_GET, Z2SE_BLUE_LUPY_GET, Z2SE_RED_LUPY_GET,
+                 Z2SE_CONSUMP_ITEM_GET, Z2SE_HEART_PIECE_GET}) {
+            t[id] = SpkPickups;
+        }
+        return t;
+    }();
+    return table;
+}
+
+float speaker_gain(u32 soundId) {
+    if (!opt_on(SpeakerEnabled)) {
+        return 0.0f;
+    }
+    const auto& table = speaker_table();
+    const auto it = table.find(soundId);
+    return it != table.end() && opt_on(it->second) ? static_cast<float>(opt(SpeakerVolume)) / 100.0f
+                                                    : 0.0f;
+}
+
 // --- Shadow render ---------------------------------------------------------------------------
 
 struct VoiceSave {
     int index;
-    float gain;
+    float gain[2];  // 0 = haptics, 1 = speaker
     JASDsp::TChannel channel;
     dusk::audio::ChannelAuxData aux;
 };
 VoiceSave g_saves[DSP_CHANNELS];
+int g_saveCount = 0;
 u16 g_wasActive[DSP_CHANNELS];
+// Voices moved to the controller speaker sit out the normal mix (already advanced by our pass).
+bool g_moved[DSP_CHANNELS];
+bool g_anyMoved = false;
 
-// Renders haptic voices into l/r (mono-ish stereo downmix). Returns false if none were active.
-bool shadow_render(float* l, float* r) {
-#ifdef _WIN32
-    // shortcut: DuskDsp.hpp globals lack DUSK_GAME_DATA, so Windows can't import them; sound-driven
-    // haptics stay off there (buzz rumble still works) until the engine annotates them.
-    (void)l;
-    (void)r;
-    return false;
-#else
-    JASDSPChannel* dsp = JASDSPChannel::sDspChannels;
-    if (dsp == nullptr) {
-        return false;
-    }
-    const float master = static_cast<float>(opt(HapticGain)) / 100.0f;
-    int count = 0;
-    {
-        std::lock_guard lock(g_mapMutex);
-        if (g_chanInfo.empty()) {
-            return false;
-        }
-        for (int i = 0; i < DSP_CHANNELS; ++i) {
-            const JASDsp::TChannel& voice = JASDsp::CH_BUF[i];
-            if (!voice.mIsActive || voice.mPauseFlag || voice.mForcedStop ||
-                dsp[i].mChannel != &JASDsp::CH_BUF[i]) {
-                continue;
-            }
-            const auto* channel = static_cast<const JASChannel*>(dsp[i].mCallbackData);
-            const auto it = g_chanInfo.find(channel);
-            if (it == g_chanInfo.end() || channel->mCallbackData != it->second.mgr) {
-                continue;
-            }
-            const float gain = category_gain(it->second.soundId) * master;
-            if (gain > 0.0f) {
-                g_saves[count].index = i;
-                g_saves[count].gain = gain;
-                ++count;
-            }
-        }
-    }
-    if (count == 0) {
-        return false;
-    }
-
+#ifndef _WIN32
+// Runs the original mixer for saved voices with a non-zero gain[out], one pass per distinct gain,
+// adding a stereo downmix to l/r. Leaves those voices advanced; the caller restores them.
+void render_pass(int out, float* l, float* r) {
     using namespace dusk::audio;
-    for (int k = 0; k < count; ++k) {
-        const int i = g_saves[k].index;
-        std::memcpy(&g_saves[k].channel, &JASDsp::CH_BUF[i], sizeof(JASDsp::TChannel));
-        std::memcpy(&g_saves[k].aux, &ChannelAux[i], sizeof(ChannelAuxData));
-    }
-    for (int i = 0; i < DSP_CHANNELS; ++i) {
-        g_wasActive[i] = JASDsp::CH_BUF[i].mIsActive;
-    }
-    const bool reverb = EnableReverb;
-    const bool hrtf = EnableHrtf;
-    const f32 volume = MasterVolume;
-    const f32 prevVolume = PrevMasterVolume;
-    EnableReverb = false;
-    EnableHrtf = false;
-
-    // One pass per distinct gain (usually one or two categories are sounding at once).
     bool done[DSP_CHANNELS] = {};
-    for (int k = 0; k < count; ++k) {
-        if (done[k]) {
+    for (int k = 0; k < g_saveCount; ++k) {
+        const float gain = g_saves[k].gain[out];
+        if (done[k] || gain <= 0.0f) {
             continue;
         }
-        const float gain = g_saves[k].gain;
         for (int i = 0; i < DSP_CHANNELS; ++i) {
             JASDsp::CH_BUF[i].mIsActive = 0;
         }
-        for (int m = k; m < count; ++m) {
-            if (!done[m] && g_saves[m].gain == gain) {
+        for (int m = k; m < g_saveCount; ++m) {
+            if (!done[m] && g_saves[m].gain[out] == gain) {
                 JASDsp::CH_BUF[g_saves[m].index].mIsActive = g_wasActive[g_saves[m].index];
                 done[m] = true;
             }
@@ -191,21 +188,120 @@ bool shadow_render(float* l, float* r) {
             r[j] += sr * gain;
         }
     }
+}
 
-    for (int k = 0; k < count; ++k) {
+void restore_voices(bool keepMoved) {
+    for (int k = 0; k < g_saveCount; ++k) {
         const int i = g_saves[k].index;
+        if (keepMoved && g_moved[i]) {
+            continue;
+        }
         std::memcpy(&JASDsp::CH_BUF[i], &g_saves[k].channel, sizeof(JASDsp::TChannel));
-        std::memcpy(&ChannelAux[i], &g_saves[k].aux, sizeof(ChannelAuxData));
+        std::memcpy(&dusk::audio::ChannelAux[i], &g_saves[k].aux, sizeof(dusk::audio::ChannelAuxData));
+    }
+}
+#endif
+
+// Renders haptic voices into hl/hr and speaker voices into sl/sr.
+void shadow_render(float* hl, float* hr, float* sl, float* sr) {
+#ifdef _WIN32
+    // shortcut: DuskDsp.hpp globals lack DUSK_GAME_DATA, so Windows can't import them; sound-driven
+    // haptics and the speaker stay off there (buzz rumble still works) until the engine annotates them.
+    (void)hl, (void)hr, (void)sl, (void)sr;
+#else
+    JASDSPChannel* dsp = JASDSPChannel::sDspChannels;
+    if (dsp == nullptr) {
+        return;
+    }
+    const bool haptics = opt_on(HapticsEnabled);
+    const float master = static_cast<float>(opt(HapticGain)) / 100.0f;
+    g_saveCount = 0;
+    bool anyHaptic = false, anySpeaker = false;
+    {
+        std::lock_guard lock(g_mapMutex);
+        if (g_chanInfo.empty()) {
+            return;
+        }
+        for (int i = 0; i < DSP_CHANNELS; ++i) {
+            const JASDsp::TChannel& voice = JASDsp::CH_BUF[i];
+            if (!voice.mIsActive || voice.mPauseFlag || voice.mForcedStop ||
+                dsp[i].mChannel != &JASDsp::CH_BUF[i]) {
+                continue;
+            }
+            const auto* channel = static_cast<const JASChannel*>(dsp[i].mCallbackData);
+            const auto it = g_chanInfo.find(channel);
+            if (it == g_chanInfo.end() || channel->mCallbackData != it->second.mgr) {
+                continue;
+            }
+            const float hg = haptics ? category_gain(it->second.soundId) * master : 0.0f;
+            const float sg = speaker_gain(it->second.soundId);
+            if (hg > 0.0f || sg > 0.0f) {
+                g_saves[g_saveCount].index = i;
+                g_saves[g_saveCount].gain[0] = hg;
+                g_saves[g_saveCount].gain[1] = sg;
+                ++g_saveCount;
+                anyHaptic |= hg > 0.0f;
+                anySpeaker |= sg > 0.0f;
+            }
+        }
+    }
+    if (g_saveCount == 0) {
+        return;
+    }
+
+    using namespace dusk::audio;
+    for (int k = 0; k < g_saveCount; ++k) {
+        const int i = g_saves[k].index;
+        std::memcpy(&g_saves[k].channel, &JASDsp::CH_BUF[i], sizeof(JASDsp::TChannel));
+        std::memcpy(&g_saves[k].aux, &ChannelAux[i], sizeof(ChannelAuxData));
     }
     for (int i = 0; i < DSP_CHANNELS; ++i) {
-        JASDsp::CH_BUF[i].mIsActive = g_wasActive[i];
+        g_wasActive[i] = JASDsp::CH_BUF[i].mIsActive;
+    }
+    const bool reverb = EnableReverb;
+    const bool hrtf = EnableHrtf;
+    const f32 volume = MasterVolume;
+    const f32 prevVolume = PrevMasterVolume;
+    EnableReverb = false;
+    EnableHrtf = false;
+
+    if (anyHaptic) {
+        render_pass(0, hl, hr);
+        restore_voices(false);
+    }
+    if (anySpeaker) {
+        render_pass(1, sl, sr);
+        const bool move = opt(SpeakerMode) == SpeakerMove;
+        for (int k = 0; k < g_saveCount; ++k) {
+            const bool moved = move && g_saves[k].gain[1] > 0.0f;
+            g_moved[g_saves[k].index] = moved;
+            g_anyMoved |= moved;
+        }
+        restore_voices(true);
+    }
+
+    for (int i = 0; i < DSP_CHANNELS; ++i) {
+        JASDsp::CH_BUF[i].mIsActive = g_moved[i] ? 0 : g_wasActive[i];
     }
     EnableReverb = reverb;
     EnableHrtf = hrtf;
     MasterVolume = volume;
     PrevMasterVolume = prevVolume;
-    return true;
 #endif
+}
+
+// After the normal mix: moved voices rejoin (their state is already one subframe ahead).
+void unmove_voices() {
+    if (!g_anyMoved) {
+        return;
+    }
+    for (int i = 0; i < DSP_CHANNELS; ++i) {
+        if (g_moved[i]) {
+            JASDsp::CH_BUF[i].mIsActive = g_wasActive[i];
+            g_moved[i] = false;
+        }
+    }
+    g_anyMoved = false;
 }
 
 // --- Output ----------------------------------------------------------------------------------
@@ -222,7 +318,7 @@ float g_buzzPhase = 0.0f;
 float g_buzzEnv = 0.0f;
 float g_frames[kN * 4];
 
-void emit(float* l, float* r) {
+void emit(const float* l, const float* r, const float* sl, const float* sr) {
     const int64_t cutoff = opt(HapticLowpass);
     const float a = cutoff > 0 ? 1.0f - std::exp(-2.0f * std::numbers::pi_v<float> *
                                                  static_cast<float>(cutoff) / kRate)
@@ -231,7 +327,7 @@ void emit(float* l, float* r) {
     const float buzzTarget = buzz ? static_cast<float>(opt(BuzzStrength)) / 100.0f : 0.0f;
     const float buzzStep =
         2.0f * std::numbers::pi_v<float> * static_cast<float>(opt(BuzzFreq)) / kRate;
-    float* ch[2] = {l, r};
+    const float* ch[2] = {l, r};
     for (int j = 0; j < kN; ++j) {
         // ~5 ms attack/release keeps the buzz from clicking as the game pulses the motor.
         g_buzzEnv += (buzzTarget - g_buzzEnv) * 0.004f;
@@ -243,8 +339,10 @@ void emit(float* l, float* r) {
             g_lp[c][1] += a * (g_lp[c][0] - g_lp[c][1]);
             g_frames[j * 4 + 2 + c] = std::clamp(g_lp[c][1] + b, -1.0f, 1.0f);
         }
-        g_frames[j * 4 + 0] = 0.0f;
-        g_frames[j * 4 + 1] = 0.0f;
+        // Channels 1/2 are the speaker (or the headphone jack). The speaker is mono.
+        const float speaker = std::clamp((sl[j] + sr[j]) * 0.5f, -1.0f, 1.0f);
+        g_frames[j * 4 + 0] = speaker;
+        g_frames[j * 4 + 1] = speaker;
     }
     std::lock_guard lock(g_streamMutex);
     if (g_stream == nullptr) {
@@ -264,17 +362,18 @@ void on_dsp_render(ModContext*, void* args, void*, void*) {
         DspRenderHook::g_orig(out);
         return;
     }
-    float l[kN] = {};
-    float r[kN] = {};
+    float hl[kN] = {}, hr[kN] = {}, sl[kN] = {}, sr[kN] = {};
 #ifdef _WIN32
-    if (opt_on(HapticsEnabled)) {
+    const bool dumping = false;
 #else
-    if (opt_on(HapticsEnabled) && !dusk::audio::DumpAudio) {
+    const bool dumping = dusk::audio::DumpAudio;
 #endif
-        shadow_render(l, r);
+    if ((opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !dumping) {
+        shadow_render(hl, hr, sl, sr);
     }
     DspRenderHook::g_orig(out);
-    emit(l, r);
+    unmove_voices();
+    emit(hl, hr, sl, sr);
 }
 
 // --- Rumble ----------------------------------------------------------------------------------
@@ -380,7 +479,7 @@ void poll_device() {
         g_device = found;
         g_streamOpen = true;
     }
-    set_status(fmt::format("Haptics active on '{}'", name));
+    set_status(fmt::format("Haptics and speaker active on '{}'", name));
 }
 
 }  // namespace

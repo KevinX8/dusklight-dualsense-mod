@@ -127,6 +127,40 @@ void restore_lightbar() {
     g_lastColor = -1;
 }
 
+// Midna's Lament (Z2BGM_MIDNA_SOS): the music itself, or the story window it belongs to, from
+// Zant's ambush (M_071) until Midna is revived at Hyrule Castle (F_0250). Same test as Z2SceneMgr.
+bool lament_active() {
+    if (Z2SeqMgr* seq = Z2GetSeqMgr(); seq != nullptr && seq->checkBgmIDPlaying(Z2BGM_MIDNA_SOS)) {
+        return true;
+    }
+    return dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[104]) &&
+           !dComIfGs_isEventBit(dSv_event_flag_c::saveBitLabels[250]);
+}
+
+// Slow, uneven breathing (~5 s) that never quite reaches full brightness.
+float lament_breath(double t) {
+    const float slow = 0.5f - 0.5f * std::cos(static_cast<float>(t) * 2.0f * 3.14159f / 5.0f);
+    const float waver = 0.85f + 0.15f * std::sin(static_cast<float>(t) * 1.7f) *
+                                    std::sin(static_cast<float>(t) * 0.53f);
+    return 0.08f + 0.72f * slow * slow * waver;
+}
+
+// Short ember flickers of her hair color, a few seconds apart.
+float lament_ember(double t) {
+    const double period = 6.5;
+    const double phase = std::fmod(t, period);
+    // Irregular: skip some cycles based on the cycle number.
+    const int cycle = static_cast<int>(t / period);
+    if ((cycle * 2654435761u >> 28) % 3 == 0 || phase > 0.9) {
+        return 0.0f;
+    }
+    const float k = static_cast<float>(1.0 - phase / 0.9);
+    const float flicker = 0.6f + 0.4f * std::sin(static_cast<float>(phase) * 47.0f);
+    return k * k * flicker;
+}
+
+bool g_lament = false;
+
 void update_lightbar(daAlink_c* link, double t) {
     const int64_t mode = opt(LightbarMode);
     if (mode == LightbarOff || link == nullptr) {
@@ -152,7 +186,11 @@ void update_lightbar(daAlink_c* link, double t) {
     }
 
     float brightness = static_cast<float>(opt(LightbarBrightness)) / 100.0f;
-    if (opt_on(LowHealthPulse) && life > 0 && life <= opt(LowHealthHearts) * 4) {
+    if (g_lament) {
+        const float ember = lament_ember(t);
+        c = mix(color(ColorLament), color(ColorLamentEmber), ember);
+        brightness *= std::max(lament_breath(t), ember);
+    } else if (opt_on(LowHealthPulse) && life > 0 && life <= opt(LowHealthHearts) * 4) {
         const float beat = 0.5f + 0.5f * std::sin(static_cast<float>(t) * 2.0f * 3.14159f * 1.2f);
         brightness *= 0.25f + 0.75f * beat;
     }
@@ -280,7 +318,13 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
     }
 
     const int64_t leds = opt(PlayerLeds);
-    if (leds != PlayerLedsOff && link != nullptr) {
+    if (g_lament) {
+        // One faint heartbeat on the center LED: two beats, then a long pause.
+        fx.enableBits2 |= 0x10;
+        const double beat = std::fmod(t, 2.2);
+        fx.padLights = (beat < 0.12 || (beat > 0.3 && beat < 0.42)) ? 0x04 : 0x00;
+        g_ownPadLights = true;
+    } else if (leds != PlayerLedsOff && link != nullptr) {
         fx.enableBits2 |= 0x10;
         if (leds == PlayerLedsHearts) {
             const u16 maxLife = std::max<u16>(dComIfGs_getMaxLifeGauge(), 4);
@@ -343,6 +387,7 @@ void controller_update() {
     PADGetVidPid(0, &vid, &pid);
     const double t = now();
     auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    g_lament = link != nullptr && opt_on(MidnaLament) && lament_active();
 
     if (vid == kSonyVid) {
         update_lightbar(link, t);

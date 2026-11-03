@@ -20,10 +20,11 @@ std::atomic<int64_t> g_opt[OptCount];
 namespace {
 
 enum Kind { Bool, Int, Select, Color };
-enum Tab { TabHaptics, TabLights, TabTriggers, TabCount };
+enum Tab { TabHaptics, TabSpeaker, TabLights, TabTriggers, TabCount };
 
 const char* const kRumbleModes[] = {"Haptic buzz", "Original motors", "Off"};
 const char* const kLightbarModes[] = {"Off", "Health", "Health + form"};
+const char* const kSpeakerModes[] = {"Also on TV", "Only on controller"};
 const char* const kPlayerLeds[] = {"Off", "Hearts", "Lantern oil"};
 
 struct Def {
@@ -77,6 +78,27 @@ const Def kDefs[OptCount] = {
     {"buzzFreq", Int, 70, nullptr, TabHaptics, nullptr, "Buzz frequency",
      "Lower feels like a rumble, higher like a buzz.", 20, 300, 5, " Hz"},
 
+    {"speakerEnabled", Bool, 1, nullptr, TabSpeaker, "Controller speaker",
+     "Controller speaker",
+     "Plays selected sounds from the DualSense speaker (or its headphone jack), like the Wii "
+     "version did with the Wii Remote. Uses the same USB audio device as the haptics."},
+    {"speakerVolume", Int, 100, nullptr, TabSpeaker, nullptr, "Speaker volume",
+     "Volume of sounds sent to the controller speaker.", 0, 200, 5, "%"},
+    {"speakerMode", Select, SpeakerMirror, nullptr, TabSpeaker, nullptr, "Where they play",
+     "Also on TV: the sound plays on both. Only on controller: it is taken out of the TV mix.",
+     0, 0, 1, nullptr, kSpeakerModes, 2},
+    {"spkMidnaCall", Bool, 1, nullptr, TabSpeaker, "Sounds", "Midna calling",
+     "Midna's call and the Z-button blink when she has something to say."},
+    {"spkMidnaVoice", Bool, 1, nullptr, TabSpeaker, nullptr, "Midna's voice",
+     "Midna's voice and speech. She rides in Link's shadow, so she talks from your hands."},
+    {"spkWiiRemote", Bool, 1, nullptr, TabSpeaker, nullptr, "Wii Remote sounds",
+     "The sounds the Wii version played on the Wii Remote: wolf senses, fishing reel, clawshot "
+     "wind-up, spin attack ready, gale boomerang, spinner rails, riddles."},
+    {"spkBow", Bool, 1, nullptr, TabSpeaker, nullptr, "Bow & slingshot",
+     "Drawing, shooting and arrow hits."},
+    {"spkPickups", Bool, 0, nullptr, TabSpeaker, nullptr, "Pickups",
+     "Rupees, hearts and heart pieces."},
+
     {"lightbarMode", Select, LightbarHealthForm, nullptr, TabLights, "Lightbar",
      "Lightbar",
      "Health: fades from the healthy to the critical color as hearts drop. Health + form: also "
@@ -105,6 +127,13 @@ const Def kDefs[OptCount] = {
      kPlayerLeds, 3},
     {"midnaMic", Bool, 1, nullptr, TabLights, nullptr, "Midna mic LED",
      "The mic LED pulses while Midna is calling you."},
+    {"midnaLament", Bool, 1, nullptr, TabLights, "Midna's Lament",
+     "Midna's Lament",
+     "While Midna is gravely hurt (Midna's Lament / desperate hour), the lightbar breathes slowly "
+     "in her color with fading embers, and one player LED beats like a weak heartbeat."},
+    {"colorLament", Color, 0, "10B8A0", TabLights, nullptr, "Lament color", "Midna's glow."},
+    {"colorLamentEmber", Color, 0, "FF4A10", TabLights, nullptr, "Ember color",
+     "The flickers of her hair."},
 
     {"triggersEnabled", Bool, 1, nullptr, TabTriggers, "Adaptive triggers",
      "Adaptive triggers",
@@ -202,7 +231,7 @@ void on_open(ModContext*, void*) {
     if (g_window != 0) {
         return;
     }
-    static const char* const titles[TabCount] = {"Haptics", "Lights", "Triggers"};
+    static const char* const titles[TabCount] = {"Haptics", "Speaker", "Lights", "Triggers"};
     UiTabDesc tabs[TabCount];
     for (int i = 0; i < TabCount; ++i) {
         tabs[i] = UI_TAB_DESC_INIT;
@@ -224,7 +253,7 @@ ModResult build_panel(ModContext*, UiElementHandle panel, void*, ModError*) {
     UiControlDesc c = UI_CONTROL_DESC_INIT;
     c.kind = UI_CONTROL_BUTTON;
     c.label = "Open Settings";
-    c.help_rml = "Haptics, lightbar, LEDs and adaptive trigger settings.";
+    c.help_rml = "Haptics, speaker, lightbar, LEDs and adaptive trigger settings.";
     c.on_pressed = on_open;
     svc_ui->pane_add_control(mod_ctx, panel, &c, nullptr);
     return MOD_OK;

@@ -28,6 +28,15 @@ enum Opt : int {
     RumbleMode,
     BuzzStrength,
     BuzzFreq,
+    // Speaker
+    SpeakerEnabled,
+    SpeakerVolume,
+    SpeakerMode,
+    SpkMidnaCall,
+    SpkMidnaVoice,
+    SpkWiiRemote,
+    SpkBow,
+    SpkPickups,
     // Lights
     LightbarMode,
     LightbarBrightness,
@@ -43,6 +52,9 @@ enum Opt : int {
     ColorEvent,
     PlayerLeds,
     MidnaMic,
+    MidnaLament,
+    ColorLament,
+    ColorLamentEmber,
     // Triggers
     TriggersEnabled,
     TriggerStrength,
@@ -60,6 +72,7 @@ enum Opt : int {
 
 enum RumbleModeValue { RumbleBuzz = 0, RumbleMotors = 1, RumbleOff = 2 };
 enum LightbarModeValue { LightbarOff = 0, LightbarHealth = 1, LightbarHealthForm = 2 };
+enum SpeakerModeValue { SpeakerMirror = 0, SpeakerMove = 1 };
 enum PlayerLedsValue { PlayerLedsOff = 0, PlayerLedsHearts = 1, PlayerLedsOil = 2 };
 
 // Ints/bools as-is; colors as 0xRRGGBB.

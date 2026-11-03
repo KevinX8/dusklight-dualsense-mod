@@ -58,6 +58,10 @@ const Def kDefs[OptCount] = {
     {"hapticLowpass", Int, 350, nullptr, TabHaptics, nullptr, "Low-pass cutoff",
      "Removes the high end of sounds so the actuators thump instead of buzzing like a speaker. "
      "0 = full range.", 0, 2000, 25, " Hz"},
+    {"hapticDetail", Int, 70, nullptr, TabHaptics, nullptr, "High-frequency detail",
+     "Clicks, chimes and metal hits sit above the cutoff and would be filtered out. This replays "
+     "their loudness as a tap the actuators can reproduce (menu cursor, sword clangs).",
+     0, 300, 10, "%"},
     CAT(CatSystem, "catSystem", 0, "Menus & items"),
     CAT(CatPlayerVoice, "catPlayerVoice", 0, "Link's voice"),
     CAT(CatPlayerSe, "catPlayerSe", 100, "Link's actions (sword, items)"),

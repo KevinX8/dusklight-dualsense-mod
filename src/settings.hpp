@@ -14,6 +14,7 @@ enum Opt : int {
     HapticsEnabled,
     HapticGain,
     HapticLowpass,
+    HapticDetail,
     CatSystem,
     CatPlayerVoice,
     CatPlayerSe,

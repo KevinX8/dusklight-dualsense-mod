@@ -157,6 +157,7 @@ int g_saveCount = 0;
 std::atomic<int> g_dbgRenders = 0;
 std::atomic<int> g_dbgClears = 0;
 std::atomic<int> g_dbgUnattributed = 0;
+std::atomic<int> g_dbgMatchedGroup[11] = {};
 std::atomic<int> g_dbgHaptic = 0, g_dbgSpeaker = 0, g_dbgTracked = 0;
 std::atomic<float> g_dbgHapticPeak = 0.0f, g_dbgSpeakerPeak = 0.0f;
 template <class T>
@@ -247,6 +248,8 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
                 g_dbgUnattributed.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
+            g_dbgMatchedGroup[std::min<u32>((it->second.soundId >> 16) & 0xFF, 10)].fetch_add(
+                1, std::memory_order_relaxed);
             const float hg = haptics ? category_gain(it->second.soundId) * master : 0.0f;
             const float sg = speaker_gain(it->second.soundId);
             if (hg > 0.0f || sg > 0.0f) {
@@ -336,6 +339,8 @@ std::atomic<bool> g_motorOn = false;
 
 // Audio-thread DSP state.
 float g_lp[2][2] = {};
+float g_detailEnv[2] = {};
+float g_detailPhase = 0.0f;
 float g_buzzPhase = 0.0f;
 float g_buzzEnv = 0.0f;
 float g_frames[kN * 4];
@@ -349,8 +354,15 @@ void emit(const float* l, const float* r, const float* sl, const float* sr) {
     const float buzzTarget = buzz ? static_cast<float>(opt(BuzzStrength)) / 100.0f : 0.0f;
     const float buzzStep =
         2.0f * std::numbers::pi_v<float> * static_cast<float>(opt(BuzzFreq)) / kRate;
+    // Detail: sounds above the cutoff (clicks, chimes, metal) would be filtered away, so their
+    // envelope is re-played on a carrier the actuators reproduce well.
+    const float detail = static_cast<float>(opt(HapticDetail)) / 100.0f;
+    constexpr float kDetailRelease = 0.9995f;  // ~40 ms
+    const float detailStep = 2.0f * std::numbers::pi_v<float> * 170.0f / kRate;
     const float* ch[2] = {l, r};
     for (int j = 0; j < kN; ++j) {
+        const float carrier = std::sin(g_detailPhase);
+        g_detailPhase = std::fmod(g_detailPhase + detailStep, 2.0f * std::numbers::pi_v<float>);
         // ~5 ms attack/release keeps the buzz from clicking as the game pulses the motor.
         g_buzzEnv += (buzzTarget - g_buzzEnv) * 0.004f;
         const float b = g_buzzEnv > 1e-4f ? std::sin(g_buzzPhase) * g_buzzEnv : 0.0f;
@@ -359,7 +371,10 @@ void emit(const float* l, const float* r, const float* sl, const float* sr) {
             // Two cascaded one-pole low-passes (12 dB/oct).
             g_lp[c][0] += a * (ch[c][j] - g_lp[c][0]);
             g_lp[c][1] += a * (g_lp[c][0] - g_lp[c][1]);
-            g_frames[j * 4 + 2 + c] = std::clamp(g_lp[c][1] + b, -1.0f, 1.0f);
+            const float high = std::fabs(ch[c][j] - g_lp[c][1]);
+            g_detailEnv[c] = std::max(high, g_detailEnv[c] * kDetailRelease);
+            const float mixed = g_lp[c][1] + b + carrier * g_detailEnv[c] * detail;
+            g_frames[j * 4 + 2 + c] = std::tanh(mixed);  // soft limit instead of hard clipping
         }
         // Channels 1/2 are the speaker (or the headphone jack). The speaker is mono.
         const float speaker = std::clamp((sl[j] + sr[j]) * 0.5f, -1.0f, 1.0f);
@@ -597,7 +612,12 @@ void haptics_update() {
         }
         const int unattributed = g_dbgUnattributed.exchange(0);
         if (opt_on(LogSounds)) {
-            mods::log::info("voice-subframes not matched to a sound effect: {}", unattributed);
+            std::string groups;
+            for (int g = 0; g < 11; ++g) {
+                groups += fmt::format(" {}", g_dbgMatchedGroup[g].exchange(0));
+            }
+            mods::log::info("voice-subframes unmatched: {}; matched per group 0-10:{}", unattributed,
+                groups);
         }
         if (++g_statsLogCount % 10 == 0) {
             mods::log::info("{}", stats);  // every ~10 s, for remote diagnosis

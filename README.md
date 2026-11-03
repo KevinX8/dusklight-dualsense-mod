@@ -51,7 +51,8 @@ the controller's audio device.
 
 ## Platform notes
 
-The release `.dusk` contains Linux x86_64, macOS (arm64 and x86_64) and Windows amd64 builds. All
+The release `.dusk` contains Linux (x86_64, arm64), macOS (arm64, x86_64) and Windows (amd64,
+arm64) builds. All
 of them build in CI. **Only Linux has been run on real hardware so far.**
 
 - **Linux:** the mod uses the game's own SDL through its exported symbols.

@@ -38,8 +38,9 @@ if (WIN32 AND NOT DS_SDL3_RUNTIME)
             DOWNLOAD_EXTRACT_TIMESTAMP FALSE
             SOURCE_SUBDIR no-build)
     FetchContent_MakeAvailable(sdl3_vc)
-    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ds_arch)
-    if (_ds_arch MATCHES "arm64|aarch64")
+    # The compiler's target, not CMAKE_SYSTEM_PROCESSOR: CI cross-compiles arm64 on an x64 host.
+    string(TOLOWER "${CMAKE_CXX_COMPILER_ARCHITECTURE_ID}" _ds_arch)
+    if (_ds_arch MATCHES "arm64")
         set(_ds_arch arm64)
     else ()
         set(_ds_arch x64)

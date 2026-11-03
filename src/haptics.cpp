@@ -149,6 +149,15 @@ struct VoiceSave {
 };
 VoiceSave g_saves[DSP_CHANNELS];
 int g_saveCount = 0;
+// Diagnostics shown in the mods panel: voices attributed this second and output peaks.
+std::atomic<int> g_dbgHaptic = 0, g_dbgSpeaker = 0, g_dbgTracked = 0;
+std::atomic<float> g_dbgHapticPeak = 0.0f, g_dbgSpeakerPeak = 0.0f;
+template <class T>
+void atomic_max(std::atomic<T>& a, T v) {
+    T cur = a.load(std::memory_order_relaxed);
+    while (v > cur && !a.compare_exchange_weak(cur, v, std::memory_order_relaxed)) {
+    }
+}
 u16 g_wasActive[DSP_CHANNELS];
 // Voices moved to the controller speaker sit out the normal mix (already advanced by our pass).
 bool g_moved[DSP_CHANNELS];
@@ -215,6 +224,7 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
     bool anyHaptic = false, anySpeaker = false;
     {
         std::lock_guard lock(g_mapMutex);
+        atomic_max(g_dbgTracked, static_cast<int>(g_chanInfo.size()));
         if (g_chanInfo.empty()) {
             return;
         }
@@ -243,6 +253,15 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
     }
     if (g_saveCount == 0) {
         return;
+    }
+    {
+        int h = 0, sp = 0;
+        for (int k = 0; k < g_saveCount; ++k) {
+            h += g_saves[k].gain[0] > 0.0f;
+            sp += g_saves[k].gain[1] > 0.0f;
+        }
+        atomic_max(g_dbgHaptic, h);
+        atomic_max(g_dbgSpeaker, sp);
     }
 
     using namespace dusk::audio;
@@ -339,6 +358,13 @@ void emit(const float* l, const float* r, const float* sl, const float* sr) {
         g_frames[j * 4 + 0] = speaker;
         g_frames[j * 4 + 1] = speaker;
     }
+    float hp = 0.0f, sp = 0.0f;
+    for (int j = 0; j < kN; ++j) {
+        hp = std::max({hp, std::fabs(g_frames[j * 4 + 2]), std::fabs(g_frames[j * 4 + 3])});
+        sp = std::max(sp, std::fabs(g_frames[j * 4]));
+    }
+    atomic_max(g_dbgHapticPeak, hp);
+    atomic_max(g_dbgSpeakerPeak, sp);
     std::lock_guard lock(g_streamMutex);
     if (g_stream == nullptr) {
         return;
@@ -405,6 +431,8 @@ HookAction on_pad_motor(ModContext*, void* args, void*, void*) {
 // --- Device management (main thread) ---------------------------------------------------------
 
 int g_pollFrames = 0;
+int g_statsFrames = 0;
+std::string g_deviceName;
 int64_t g_lastRumbleMode = -1;
 std::string g_lastStatus;
 
@@ -489,6 +517,7 @@ void poll_device() {
         g_device = found;
         g_streamOpen = true;
     }
+    g_deviceName = name;
     set_status(fmt::format("Haptics and speaker active on '{}'", name));
 }
 
@@ -528,6 +557,17 @@ void haptics_update() {
     if (g_pollFrames-- <= 0) {
         g_pollFrames = 120;
         poll_device();
+    }
+    if (g_streamOpen && g_statsFrames-- <= 0) {
+        g_statsFrames = 60;
+        const auto pct = [](float v) { return static_cast<int>(v * 100.0f + 0.5f); };
+        // Panel only (not logged): live proof that sounds are being picked up and sent.
+        settings_set_status(fmt::format("Active on '{}'. Last second: {} haptic / {} speaker "
+                                        "sounds (of {} tracked), peak {}% / {}%",
+            g_deviceName, g_dbgHaptic.exchange(0), g_dbgSpeaker.exchange(0),
+            g_dbgTracked.exchange(0), pct(g_dbgHapticPeak.exchange(0.0f)),
+            pct(g_dbgSpeakerPeak.exchange(0.0f)))
+                .c_str());
     }
 }
 

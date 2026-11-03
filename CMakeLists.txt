@@ -9,6 +9,10 @@ endif ()
 
 project(dualsense_mod VERSION 1.0.0 LANGUAGES CXX)
 
+# Dusklight commit the mod builds against when no local checkout is given (-DDUSKLIGHT_DIR=...).
+if (NOT DUSKLIGHT_VERSION)
+    set(DUSKLIGHT_VERSION "77705f8bb95ef7b7dca4675b149c4bcb6a48da34")
+endif ()
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/FetchDusklight.cmake")
 add_subdirectory("${DUSKLIGHT_DIR}/sdk" dusklight-sdk EXCLUDE_FROM_ALL)
 

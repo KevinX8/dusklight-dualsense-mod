@@ -1,0 +1,129 @@
+name: Build
+
+on:
+  push:
+    branches: ["*"]
+    tags: ["*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  SYMGEN_VERSION: v1.3.6
+  SDL3_VERSION: 3.4.10
+
+jobs:
+  build:
+    name: Build ${{matrix.platform}}
+    runs-on: ${{matrix.runner}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x86_64
+            runner: ubuntu-latest
+          - platform: macos-arm64
+            runner: macos-latest
+          - platform: macos-x86_64
+            runner: macos-latest
+            cmake_args: -DCMAKE_OSX_ARCHITECTURES=x86_64
+          - platform: windows-amd64
+            runner: windows-latest
+            msvc_arch: amd64
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Read pinned Dusklight version
+        id: dusklight
+        shell: bash
+        run: echo "version=$(sed -n 's/.*set(DUSKLIGHT_VERSION "\([^"]*\)").*/\1/p' CMakeLists.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Dusklight sources
+        uses: actions/cache@v6
+        with:
+          path: dusklight
+          key: dusklight-${{runner.os}}-${{steps.dusklight.outputs.version}}
+
+      - name: Enable Visual Studio environment
+        if: matrix.msvc_arch
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: ${{matrix.msvc_arch}}
+
+      - name: Install ninja
+        if: matrix.msvc_arch
+        run: choco install ninja
+
+      # The game doesn't export SDL on macOS, so the mod ships SDL3 (universal framework binary)
+      # and loads it by path. Windows gets SDL3.dll from CMakeLists.txt.
+      - name: Fetch SDL3 for macOS
+        if: startsWith(matrix.platform, 'macos')
+        run: |
+          curl -fsSL -o SDL3.dmg "https://github.com/libsdl-org/SDL/releases/download/release-${SDL3_VERSION}/SDL3-${SDL3_VERSION}.dmg"
+          hdiutil attach SDL3.dmg -mountpoint /tmp/sdl3 -nobrowse -readonly
+          bin=$(find /tmp/sdl3 -path '*macos*' -path '*SDL3.framework/Versions/*' -name SDL3 -type f | head -1)
+          if [ -z "$bin" ]; then find /tmp/sdl3 -maxdepth 6 | head -80; exit 1; fi
+          mkdir -p sdl3 && cp "$bin" sdl3/libSDL3.0.dylib
+          lipo -info sdl3/libSDL3.0.dylib
+          hdiutil detach /tmp/sdl3
+          echo "SDL3_ARGS=-DDS_SDL3_RUNTIME=$PWD/sdl3/libSDL3.0.dylib" >> "$GITHUB_ENV"
+
+      - name: Configure CMake
+        shell: bash
+        run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=RelWithDebInfo ${{matrix.cmake_args}} $SDL3_ARGS
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        if: matrix.platform == 'linux-x86_64'
+        run: |
+          cmake --build build --target ds5_test
+          ./build/ds5_test
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: mod-${{matrix.platform}}
+          path: build/mods/*.dusk
+          if-no-files-found: error
+
+  combine:
+    name: Combine bundles
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download platform bundles
+        uses: actions/download-artifact@v8
+        with:
+          pattern: mod-*
+          path: dist
+
+      - name: Install symgen
+        run: |
+          curl -fsSL -o symgen \
+            "https://github.com/encounter/symgen/releases/download/${SYMGEN_VERSION}/symgen-linux-x86_64"
+          chmod +x symgen
+
+      - name: Merge bundles
+        run: |
+          name=$(basename dist/mod-linux-x86_64/*.dusk)
+          python3 tools/merge_mod.py -o "combined/$name" --symgen ./symgen dist/*/*.dusk
+          unzip -l "combined/$name"
+
+      - name: Upload combined bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: dualsense_mod
+          path: combined/*.dusk
+          if-no-files-found: error
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{github.token}}
+        run: gh release create "$GITHUB_REF_NAME" combined/*.dusk --verify-tag --generate-notes

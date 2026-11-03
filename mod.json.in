@@ -1,0 +1,7 @@
+{
+  "id": "com.kevinx8.dualsense",
+  "name": "DualSense Effects",
+  "version": "@PROJECT_VERSION@",
+  "author": "kevinx8",
+  "description": "DualSense (USB) effects: audio haptics driven by the game's own sound effects, adaptive triggers, health/form lightbar, player LEDs and Midna mic LED. All configurable."
+}

@@ -60,6 +60,7 @@ add_mod(dualsense_mod
         FEATURES game fmt
         SOURCES src/mod.cpp src/settings.cpp src/haptics.cpp src/controller.cpp src/sdl_dyn.cpp
         MOD_JSON "${CMAKE_CURRENT_BINARY_DIR}/mod.json"
+        RES_DIR res              # res/icon.png (from art/)
         ${_ds_runtime_args}
 )
 # DuskDsp.hpp (audio engine internals) lives under src/.

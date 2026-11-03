@@ -619,7 +619,7 @@ void haptics_update() {
             mods::log::info("voice-subframes unmatched: {}; matched per group 0-10:{}", unattributed,
                 groups);
         }
-        if (++g_statsLogCount % 10 == 0) {
+        if (opt_on(LogSounds) && ++g_statsLogCount % 10 == 0) {
             mods::log::info("{}", stats);  // every ~10 s, for remote diagnosis
         }
     }

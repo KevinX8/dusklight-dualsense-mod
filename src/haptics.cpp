@@ -39,7 +39,11 @@ extern const HookService* svc_hook;
 
 DEFINE_HOOK(dusk::audio::DspRender, DspRenderHook);
 // Every SE passes through here when started (startTrack_ itself is partly inlined).
-DEFINE_HOOK(&JAISe::JAISeMgr_startID_, SeStartId);
+// By name: MSVC can't constant-initialize a member pointer into JAISe (multiple inheritance).
+DEFINE_HOOK_SYMBOL("JAISe::JAISeMgr_startID_",
+    void(JAISe*, JAISoundID, const JGeometry::TVec3<f32>*, JAIAudience* IF_DUSK_ARG(
+        std::shared_ptr<JAISound::SoundEffectReplacementSlot>)),
+    SeStartId);
 DEFINE_HOOK(&JASTrack::channelStart, TrackChannelStart);
 DEFINE_HOOK(PADControlMotor, PadControlMotor);
 

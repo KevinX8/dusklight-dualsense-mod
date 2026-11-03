@@ -64,6 +64,11 @@ add_mod(dualsense_mod
 )
 # DuskDsp.hpp (audio engine internals) lives under src/.
 target_include_directories(dualsense_mod PRIVATE "${SDL3_INCLUDE_DIR}" "${DUSKLIGHT_DIR}/src")
+if (MSVC)
+    # Without it MSVC reports __cplusplus as 199711L and dolphin/types.h #defines nullptr as 0,
+    # which breaks the standard headers included after it.
+    target_compile_options(dualsense_mod PRIVATE /Zc:__cplusplus)
+endif ()
 if (UNIX)
     target_link_libraries(dualsense_mod PRIVATE ${CMAKE_DL_LIBS})
 endif ()

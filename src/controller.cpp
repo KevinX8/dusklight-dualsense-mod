@@ -98,8 +98,6 @@ int g_lastColor = -1;
 u16 g_prevLife = 0;
 double g_damageFlashStart = -10.0;
 
-Ds5Effects g_lastSent = {};
-bool g_sentOnce = false;
 SDL_Gamepad* g_lastPad = nullptr;
 int g_resendFrames = 0;
 // Which effect groups we own and must reset when turned off.
@@ -374,76 +372,132 @@ u8 fill_leds(float fraction) {
     return static_cast<u8>((1u << n) - 1);
 }
 
+// What the controller currently has, per effect group. Each report only carries the groups that
+// changed: re-sending a trigger effect restarts its motor, which is audible.
+struct SentState {
+    bool trig = false, pad = false, mic = false, led = false;
+    Trigger left{}, right{};
+    u8 padLights = 0, micMode = 0, rgb[3] = {};
+};
+SentState g_sent;
+
+// A trigger state must hold for a few frames before it is sent, so momentary flips (e.g. guard
+// toggling for one frame) don't make the motor jump back and forth.
+struct Debounce {
+    Trigger candidate{}, committed = trigger_off();
+    int frames = 0;
+    void feed(const Trigger& want, bool immediate) {
+        if (want != candidate) {
+            candidate = want;
+            frames = 0;
+        } else if (frames < 1000) {
+            ++frames;
+        }
+        if (immediate || frames >= 6) {
+            committed = candidate;
+        }
+    }
+};
+Debounce g_left, g_right;
+
 void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
+    const bool newPad = pad != g_lastPad;
+    if (newPad) {
+        g_sent = {};
+    }
+    const bool reassert = newPad || g_resendFrames-- <= 0;
     Ds5Effects fx = {};
 
     if (opt_on(TriggersEnabled)) {
         Trigger left, right;
         choose_triggers(link, left, right);
-        fx.enableBits1 |= 0x04 | 0x08;
-        std::memcpy(fx.rightTrigger, right.data(), right.size());
-        std::memcpy(fx.leftTrigger, left.data(), left.size());
+        g_left.feed(left, newPad);
+        g_right.feed(right, newPad);
         g_ownTriggers = true;
     } else if (g_ownTriggers) {
-        const Trigger off = trigger_off();
-        fx.enableBits1 |= 0x04 | 0x08;
-        std::memcpy(fx.rightTrigger, off.data(), off.size());
-        std::memcpy(fx.leftTrigger, off.data(), off.size());
+        g_left.feed(trigger_off(), true);
+        g_right.feed(trigger_off(), true);
         g_ownTriggers = false;
     }
+    if ((g_ownTriggers || g_sent.trig) &&
+        (!g_sent.trig || g_left.committed != g_sent.left || g_right.committed != g_sent.right)) {
+        fx.enableBits1 |= 0x04 | 0x08;
+        std::memcpy(fx.rightTrigger, g_right.committed.data(), g_right.committed.size());
+        std::memcpy(fx.leftTrigger, g_left.committed.data(), g_left.committed.size());
+    }
 
+    int padLights = -1;
     const int64_t leds = opt(PlayerLeds);
     if (g_lament) {
         // One faint heartbeat on the center LED: two beats, then a long pause.
-        fx.enableBits2 |= 0x10;
         const double beat = std::fmod(t, 2.2);
-        fx.padLights = (beat < 0.12 || (beat > 0.3 && beat < 0.42)) ? 0x04 : 0x00;
+        padLights = (beat < 0.12 || (beat > 0.3 && beat < 0.42)) ? 0x04 : 0x00;
         g_ownPadLights = true;
     } else if (leds != PlayerLedsOff && link != nullptr) {
-        fx.enableBits2 |= 0x10;
         if (leds == PlayerLedsHearts) {
             const u16 maxLife = std::max<u16>(dComIfGs_getMaxLifeGauge(), 4);
-            fx.padLights = fill_leds(static_cast<float>(dComIfGs_getLife()) / maxLife);
+            padLights = fill_leds(static_cast<float>(dComIfGs_getLife()) / maxLife);
         } else {
             const u16 maxOil = dComIfGs_getMaxOil();
-            fx.padLights = maxOil ? fill_leds(static_cast<float>(dComIfGs_getOil()) / maxOil) : 0;
+            padLights = maxOil ? fill_leds(static_cast<float>(dComIfGs_getOil()) / maxOil) : 0;
         }
         g_ownPadLights = true;
     } else if (g_ownPadLights) {
-        fx.enableBits2 |= 0x10;
-        fx.padLights = 0x04;  // SDL's player 1 pattern
+        padLights = 0x04;  // SDL's player 1 pattern
         g_ownPadLights = false;
     }
-
-    if (opt_on(MidnaMic) && link != nullptr) {
-        fx.enableBits2 |= 0x01;
-        fx.micLightMode = t < g_midnaCallUntil ? 2 : 0;
-        g_ownMic = true;
-    } else if (g_ownMic) {
-        fx.enableBits2 |= 0x01;
-        fx.micLightMode = 0;
-        g_ownMic = false;
+    if (padLights >= 0 && (reassert || !g_sent.pad || padLights != g_sent.padLights)) {
+        fx.enableBits2 |= 0x10;
+        fx.padLights = static_cast<u8>(padLights);
     }
 
-    if (g_reportLed) {
+    int mic = -1;
+    if (opt_on(MidnaMic) && link != nullptr) {
+        mic = t < g_midnaCallUntil ? 2 : 0;
+        g_ownMic = true;
+    } else if (g_ownMic) {
+        mic = 0;
+        g_ownMic = false;
+    }
+    if (mic >= 0 && (reassert || !g_sent.mic || mic != g_sent.micMode)) {
+        fx.enableBits2 |= 0x01;
+        fx.micLightMode = static_cast<u8>(mic);
+    }
+
+    if (g_reportLed && (reassert || !g_sent.led || std::memcmp(g_reportRgb, g_sent.rgb, 3) != 0)) {
         fx.enableBits2 |= 0x04;
         fx.ledRed = g_reportRgb[0];
         fx.ledGreen = g_reportRgb[1];
         fx.ledBlue = g_reportRgb[2];
     }
 
-    const bool force = pad != g_lastPad || g_resendFrames-- <= 0;
+    if (reassert) {
+        g_resendFrames = 180;  // re-assert LEDs (never triggers) in case SDL reset them
+    }
     if (fx.enableBits1 == 0 && fx.enableBits2 == 0) {
-        return;
-    }
-    if (!force && g_sentOnce && std::memcmp(&fx, &g_lastSent, sizeof(fx)) == 0) {
-        return;
-    }
-    if (sdl.SendGamepadEffect(pad, &fx, sizeof(fx))) {
-        g_lastSent = fx;
-        g_sentOnce = true;
         g_lastPad = pad;
-        g_resendFrames = 180;  // re-assert after controller reconnects or SDL resets
+        return;
+    }
+    if (!sdl.SendGamepadEffect(pad, &fx, sizeof(fx))) {
+        return;
+    }
+    g_lastPad = pad;
+    if (fx.enableBits1 & 0x04) {
+        g_sent.trig = g_ownTriggers;
+        std::memcpy(g_sent.left.data(), fx.leftTrigger, g_sent.left.size());
+        std::memcpy(g_sent.right.data(), fx.rightTrigger, g_sent.right.size());
+    }
+    if (fx.enableBits2 & 0x10) {
+        g_sent.pad = true;
+        g_sent.padLights = fx.padLights;
+    }
+    if (fx.enableBits2 & 0x01) {
+        g_sent.mic = true;
+        g_sent.micMode = fx.micLightMode;
+    }
+    if (fx.enableBits2 & 0x04) {
+        g_sent.led = true;
+        std::memcpy(g_sent.rgb, g_reportRgb, 3);
     }
 }
 
@@ -529,7 +583,7 @@ void controller_shutdown() {
     }
     g_rumbling = false;
     g_lastPad = nullptr;
-    g_sentOnce = false;
+    g_sent = {};
     g_ownTriggers = g_ownPadLights = g_ownMic = false;
 }
 

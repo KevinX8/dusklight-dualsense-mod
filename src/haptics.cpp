@@ -28,6 +28,7 @@ extern const HookService* svc_hook;
 #include <dolphin/pad.h>
 
 #include <algorithm>
+#include <iterator>
 #include <atomic>
 #include <cmath>
 #include <cstring>
@@ -350,20 +351,30 @@ void emit(const float* l, const float* r, const float* sl, const float* sr) {
     }
 }
 
-void on_dsp_render(ModContext*, void* args, void*, void*) {
-    OutputSubframe& out = mods::arg_ref<OutputSubframe&>(args, 0);
-    if (!g_streamOpen.load(std::memory_order_relaxed)) {
-        DspRenderHook::g_orig(out);
-        return;
+// Pre/post rather than replace, so other mods can still replace DspRender (e.g. Dawnlight).
+float g_hl[kN], g_hr[kN], g_sl[kN], g_sr[kN];
+bool g_shadowRan = false;
+
+HookAction on_dsp_render_pre(ModContext*, void*, void*, void*) {
+    g_shadowRan = g_streamOpen.load(std::memory_order_relaxed);
+    if (!g_shadowRan) {
+        return HOOK_CONTINUE;
     }
-    float hl[kN] = {}, hr[kN] = {}, sl[kN] = {}, sr[kN] = {};
-    const bool dumping = dusk::audio::DumpAudio;
-    if ((opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !dumping) {
-        shadow_render(hl, hr, sl, sr);
+    std::fill(std::begin(g_hl), std::end(g_hl), 0.0f);
+    std::fill(std::begin(g_hr), std::end(g_hr), 0.0f);
+    std::fill(std::begin(g_sl), std::end(g_sl), 0.0f);
+    std::fill(std::begin(g_sr), std::end(g_sr), 0.0f);
+    if ((opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !dusk::audio::DumpAudio) {
+        shadow_render(g_hl, g_hr, g_sl, g_sr);
     }
-    DspRenderHook::g_orig(out);
+    return HOOK_CONTINUE;
+}
+
+void on_dsp_render_post(ModContext*, void*, void*, void*) {
     unmove_voices();
-    emit(hl, hr, sl, sr);
+    if (g_shadowRan) {
+        emit(g_hl, g_hr, g_sl, g_sr);
+    }
 }
 
 // --- Rumble ----------------------------------------------------------------------------------
@@ -490,7 +501,8 @@ ModResult haptics_init(const char* native_dir, ModError* error) {
 
     if (mods::hook::add_post<SeStartId>(on_se_start_id) != MOD_OK ||
         mods::hook::add_post<TrackChannelStart>(on_channel_start) != MOD_OK ||
-        mods::hook::replace<DspRenderHook>(on_dsp_render) != MOD_OK) {
+        mods::hook::add_pre<DspRenderHook>(on_dsp_render_pre) != MOD_OK ||
+        mods::hook::add_post<DspRenderHook>(on_dsp_render_post) != MOD_OK) {
         mods::log::warn("audio hooks unavailable; sound-driven haptics disabled");
     }
     if (mods::hook::add_pre<PadControlMotor>(on_pad_motor) != MOD_OK) {

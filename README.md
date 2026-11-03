@@ -51,17 +51,23 @@ the controller's audio device.
 
 ## Platform notes
 
+The release `.dusk` contains Linux x86_64, macOS (arm64 and x86_64) and Windows amd64 builds. All
+of them build in CI. **Only Linux has been run on real hardware so far.**
+
 - **Linux:** the mod uses the game's own SDL through its exported symbols.
-- **Windows/macOS** (untested): the game doesn't export SDL there. Instead the mod ships its own
-  SDL3 library and runs a private SDL instance that opens only the DualSense, through HIDAPI with
-  every other backend and driver disabled. Triggers, LEDs, the lightbar, rumble and the haptics
-  audio all go through that instance. The game's own writes to the controller are blocked so the
-  two don't fight: `PADSetColor` on port 0, Dusklight's LED feature, and `PADControlMotor`.
-  - Windows: the build downloads `SDL3.dll` (3.4.10, VC) and packages it beside the mod.
-  - macOS: pass `-DDS_SDL3_RUNTIME=/path/to/libSDL3.0.dylib`. Otherwise the mod looks for a
-    system copy (e.g. Homebrew).
-  - On Windows the engine's audio globals are imported via `src/dsp_globals.hpp`, which
-    redeclares them `dllimport`. This assumes the game's export list includes them. If the
-    Windows link fails on `ChannelAux`, `MasterVolume` etc., that assumption is wrong.
+- **Windows/macOS** (built, not yet run): the game doesn't export SDL there. Instead the mod
+  ships its own SDL3 library and runs a private SDL instance that opens only the DualSense,
+  through HIDAPI with every other backend and driver disabled. Triggers, LEDs, the lightbar,
+  rumble and the haptics/speaker audio all go through that instance. The game's own writes to
+  the controller are blocked so the two don't fight: `PADSetColor` on port 0, Dusklight's LED
+  feature, and `PADControlMotor`.
+  - CI bundles SDL3 3.4.10: `SDL3.dll` on Windows, and the universal library from the official
+    `.dmg` on macOS. Local macOS builds take `-DDS_SDL3_RUNTIME=/path/to/libSDL3.0.dylib`, or
+    fall back to a system copy (e.g. Homebrew).
+  - The engine's `src/dusk/` code isn't in the Windows/macOS export lists. So the mod reaches the
+    audio mixer (`dusk::audio::DspRender` and its globals), the audio-thread lock and
+    Dusklight's LED feature by name through the symbol manifest, on every platform. If a name
+    doesn't resolve, the log says `symbol '…' not found`. Sound-driven haptics and the speaker
+    then turn off, while triggers, LEDs and the buzz keep working.
 - `build/sdl_dyn_test` exercises the private-instance path on any OS:
   `cmake --build build --target sdl_dyn_test && ./build/sdl_dyn_test`.

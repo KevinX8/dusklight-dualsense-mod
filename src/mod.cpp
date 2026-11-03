@@ -7,6 +7,7 @@
 #include "mods/service.hpp"
 #include "mods/svc/config.h"
 #include "mods/svc/hook.h"
+#include "mods/svc/host.h"
 #include "mods/svc/log.h"
 #include "mods/svc/ui.h"
 
@@ -15,6 +16,7 @@ IMPORT_SERVICE(LogService, svc_log);
 IMPORT_SERVICE(ConfigService, svc_config);
 IMPORT_SERVICE(UiService, svc_ui);
 IMPORT_SERVICE(HookService, svc_hook);
+IMPORT_SERVICE(HostService, svc_host);
 
 extern "C" {
 
@@ -22,7 +24,7 @@ MOD_EXPORT ModResult mod_initialize(ModError* error) {
     if (ds::settings_register(error) != MOD_OK) {
         return MOD_ERROR;
     }
-    if (ds::haptics_init(error) != MOD_OK || ds::controller_init(error) != MOD_OK) {
+    if (ds::haptics_init(svc_host->native_dir(mod_ctx), error) != MOD_OK || ds::controller_init(error) != MOD_OK) {
         return MOD_ERROR;
     }
     svc_log->info(mod_ctx, "DualSense effects initialized");

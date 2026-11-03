@@ -7,6 +7,8 @@
 // optional rumble buzz and sent to the controller's audio device on channels 3/4 (the actuators).
 #include "haptics.hpp"
 
+#include "controller.hpp"
+
 #include "sdl_dyn.hpp"
 #include "settings.hpp"
 
@@ -22,7 +24,7 @@ extern const HookService* svc_hook;
 #include "JSystem/JAudio2/JASDSPChannel.h"
 #include "JSystem/JAudio2/JASTrack.h"
 #include "Z2AudioLib/Z2SeMgr.h"
-#include "dusk/audio/DuskDsp.hpp"
+#include "dsp_globals.hpp"
 #include <dolphin/pad.h>
 
 #include <algorithm>
@@ -151,7 +153,6 @@ u16 g_wasActive[DSP_CHANNELS];
 bool g_moved[DSP_CHANNELS];
 bool g_anyMoved = false;
 
-#ifndef _WIN32
 // Runs the original mixer for saved voices with a non-zero gain[out], one pass per distinct gain,
 // adding a stereo downmix to l/r. Leaves those voices advanced; the caller restores them.
 void render_pass(int out, float* l, float* r) {
@@ -200,15 +201,9 @@ void restore_voices(bool keepMoved) {
         std::memcpy(&dusk::audio::ChannelAux[i], &g_saves[k].aux, sizeof(dusk::audio::ChannelAuxData));
     }
 }
-#endif
 
 // Renders haptic voices into hl/hr and speaker voices into sl/sr.
 void shadow_render(float* hl, float* hr, float* sl, float* sr) {
-#ifdef _WIN32
-    // shortcut: DuskDsp.hpp globals lack DUSK_GAME_DATA, so Windows can't import them; sound-driven
-    // haptics and the speaker stay off there (buzz rumble still works) until the engine annotates them.
-    (void)hl, (void)hr, (void)sl, (void)sr;
-#else
     JASDSPChannel* dsp = JASDSPChannel::sDspChannels;
     if (dsp == nullptr) {
         return;
@@ -287,7 +282,6 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
     EnableHrtf = hrtf;
     MasterVolume = volume;
     PrevMasterVolume = prevVolume;
-#endif
 }
 
 // After the normal mix: moved voices rejoin (their state is already one subframe ahead).
@@ -363,11 +357,7 @@ void on_dsp_render(ModContext*, void* args, void*, void*) {
         return;
     }
     float hl[kN] = {}, hr[kN] = {}, sl[kN] = {}, sr[kN] = {};
-#ifdef _WIN32
-    const bool dumping = false;
-#else
     const bool dumping = dusk::audio::DumpAudio;
-#endif
     if ((opt_on(HapticsEnabled) || opt_on(SpeakerEnabled)) && !dumping) {
         shadow_render(hl, hr, sl, sr);
     }
@@ -382,7 +372,16 @@ HookAction on_pad_motor(ModContext*, void* args, void*, void*) {
     const u32 chan = mods::arg<u32>(args, 0);
     const u32 cmd = mods::arg<u32>(args, 1);
     const int64_t mode = opt(RumbleMode);
-    if (chan != 0 || mode == RumbleMotors) {
+    if (chan != 0) {
+        return HOOK_CONTINUE;
+    }
+    if (controller_owns_pad()) {
+        // Private SDL instance: the game's SDL must not write to the controller; controller.cpp
+        // plays motors itself when wanted.
+        g_motorOn = cmd == PAD_MOTOR_RUMBLE;
+        return HOOK_SKIP_ORIGINAL;
+    }
+    if (mode == RumbleMotors) {
         return HOOK_CONTINUE;
     }
     if (mode == RumbleBuzz && !g_streamOpen.load()) {
@@ -484,8 +483,8 @@ void poll_device() {
 
 }  // namespace
 
-ModResult haptics_init(ModError* error) {
-    const char* source = sdl_load();
+ModResult haptics_init(const char* native_dir, ModError* error) {
+    const char* source = sdl_load(native_dir);
     mods::log::info("SDL audio: {}; gamepad effects: {}", source,
         sdl.SendGamepadEffect ? "available" : "unavailable");
 
@@ -518,6 +517,14 @@ void haptics_update() {
         g_pollFrames = 120;
         poll_device();
     }
+}
+
+bool haptics_motor_on() {
+    return g_motorOn.load(std::memory_order_relaxed);
+}
+
+bool haptics_stream_open() {
+    return g_streamOpen.load(std::memory_order_relaxed);
 }
 
 void haptics_shutdown() {

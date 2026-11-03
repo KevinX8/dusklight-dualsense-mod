@@ -17,6 +17,8 @@ extern const HookService* svc_hook;
 #include "d/d_attention.h"
 #include "d/d_com_inf_game.h"
 #include "d/d_kankyo.h"
+#include "dusk/gamepad_color.h"
+#include "haptics.hpp"
 #include <dolphin/pad.h>
 
 #include <algorithm>
@@ -26,6 +28,8 @@ extern const HookService* svc_hook;
 
 DEFINE_HOOK(&Z2SeMgr::seStart, SeStart);
 DEFINE_HOOK(&Z2SeqMgr::subBgmStart, SubBgmStart);
+DEFINE_HOOK(PADSetColor, PadSetColor);
+DEFINE_HOOK(dusk::input::handleGamepadColor, GameGamepadColor);
 
 namespace ds {
 namespace {
@@ -105,6 +109,69 @@ bool is_dualsense(u32 vid, u32 pid) {
     return vid == kSonyVid && (pid == 0x0CE6 || pid == 0x0DF2);
 }
 
+// Private SDL instance (Windows/macOS): our own handle to the DualSense.
+SDL_Gamepad* g_ownPad = nullptr;
+int g_ownPadPoll = 0;
+bool g_rumbling = false;
+int g_rumbleRefresh = 0;
+// Lightbar color carried in our effect report when the private instance owns the controller.
+bool g_reportLed = false;
+u8 g_reportRgb[3] = {};
+
+bool private_pad() {
+    return sdl.own_gamepad && g_ownPad != nullptr;
+}
+
+void poll_own_pad() {
+    sdl.UpdateGamepads();
+    if (g_ownPad != nullptr && !sdl.GamepadConnected(g_ownPad)) {
+        sdl.CloseGamepad(g_ownPad);
+        g_ownPad = nullptr;
+        g_lastPad = nullptr;
+    }
+    if (g_ownPad != nullptr || g_ownPadPoll-- > 0) {
+        return;
+    }
+    g_ownPadPoll = 60;
+    int count = 0;
+    SDL_JoystickID* ids = sdl.GetGamepads(&count);
+    for (int i = 0; ids != nullptr && i < count && g_ownPad == nullptr; ++i) {
+        if (is_dualsense(sdl.GetGamepadVendorForID(ids[i]), sdl.GetGamepadProductForID(ids[i]))) {
+            g_ownPad = sdl.OpenGamepad(ids[i]);
+        }
+    }
+    if (ids != nullptr) {
+        sdl.Free(ids);
+    }
+    if (g_ownPad != nullptr) {
+        mods::log::info("opened the DualSense on the private SDL instance");
+    }
+}
+
+// The game's rumble never reaches the DualSense in private mode (see haptics.cpp); play it here
+// when the user wants motors, or as the fallback when buzz mode has no haptic audio device.
+void update_own_rumble() {
+    const int64_t mode = opt(RumbleMode);
+    const bool want = haptics_motor_on() &&
+                      (mode == RumbleMotors || (mode == RumbleBuzz && !haptics_stream_open()));
+    if (want == g_rumbling && (!want || g_rumbleRefresh-- > 0)) {
+        return;
+    }
+    sdl.RumbleGamepad(g_ownPad, want ? 32767 : 0, want ? 32767 : 0, want ? 1000 : 0);
+    g_rumbling = want;
+    g_rumbleRefresh = 30;
+}
+
+// Game writes to the lightbar would fight ours: Dusklight's own LED feature always, and in
+// private mode any PADSetColor (it goes through the game's SDL to the same controller).
+HookAction on_game_gamepad_color(ModContext*, void*, void*, void*) {
+    return opt(LightbarMode) != LightbarOff ? HOOK_SKIP_ORIGINAL : HOOK_CONTINUE;
+}
+
+HookAction on_pad_set_color(ModContext*, void* args, void*, void*) {
+    return private_pad() && mods::arg<u32>(args, 0) == 0 ? HOOK_SKIP_ORIGINAL : HOOK_CONTINUE;
+}
+
 void set_lightbar(Rgb c) {
     const auto to8 = [](float v) { return static_cast<u8>(std::clamp(v, 0.0f, 1.0f) * 255.0f + 0.5f); };
     const u8 r = to8(c.r), g = to8(c.g), b = to8(c.b);
@@ -112,16 +179,24 @@ void set_lightbar(Rgb c) {
     if (packed == g_lastColor) {
         return;
     }
+    g_lastColor = packed;
+    if (private_pad()) {
+        g_reportLed = true;
+        g_reportRgb[0] = r;
+        g_reportRgb[1] = g;
+        g_reportRgb[2] = b;
+        return;
+    }
     if (!g_haveOriginalColor) {
         g_haveOriginalColor =
             PADGetColor(0, &g_origColor[0], &g_origColor[1], &g_origColor[2]) != FALSE;
     }
-    g_lastColor = packed;
     PADSetColor(0, r, g, b);
 }
 
 void restore_lightbar() {
-    if (g_haveOriginalColor && g_lastColor != -1) {
+    g_reportLed = false;
+    if (!private_pad() && g_haveOriginalColor && g_lastColor != -1) {
         PADSetColor(0, g_origColor[0], g_origColor[1], g_origColor[2]);
     }
     g_lastColor = -1;
@@ -350,6 +425,13 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
         g_ownMic = false;
     }
 
+    if (g_reportLed) {
+        fx.enableBits2 |= 0x04;
+        fx.ledRed = g_reportRgb[0];
+        fx.ledGreen = g_reportRgb[1];
+        fx.ledBlue = g_reportRgb[2];
+    }
+
     const bool force = pad != g_lastPad || g_resendFrames-- <= 0;
     if (fx.enableBits1 == 0 && fx.enableBits2 == 0) {
         return;
@@ -374,10 +456,30 @@ ModResult controller_init(ModError*) {
     if (mods::hook::add_post<SubBgmStart>(on_sub_bgm_start) != MOD_OK) {
         mods::log::warn("Z2SeqMgr::subBgmStart hook unavailable; item-get flash disabled");
     }
+    if (mods::hook::add_pre<GameGamepadColor>(on_game_gamepad_color) != MOD_OK) {
+        mods::log::warn("handleGamepadColor hook unavailable; Dusklight's LED option may fight ours");
+    }
+    if (sdl.own_gamepad && mods::hook::add_pre<PadSetColor>(on_pad_set_color) != MOD_OK) {
+        mods::log::warn("PADSetColor hook unavailable; the game may override the lightbar");
+    }
     return MOD_OK;
 }
 
 void controller_update() {
+    const double t = now();
+    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
+    g_lament = link != nullptr && opt_on(MidnaLament) && lament_active();
+
+    if (sdl.own_gamepad) {
+        poll_own_pad();
+        if (g_ownPad != nullptr) {
+            update_own_rumble();
+            update_lightbar(link, t);
+            update_effects(link, t, g_ownPad);
+        }
+        return;
+    }
+
     u32 vid = 0, pid = 0;
     if (PADGetIndexForPort(0) < 0) {
         g_lastPad = nullptr;
@@ -385,10 +487,6 @@ void controller_update() {
         return;
     }
     PADGetVidPid(0, &vid, &pid);
-    const double t = now();
-    auto* link = static_cast<daAlink_c*>(dComIfGp_getLinkPlayer());
-    g_lament = link != nullptr && opt_on(MidnaLament) && lament_active();
-
     if (vid == kSonyVid) {
         update_lightbar(link, t);
     }
@@ -399,15 +497,19 @@ void controller_update() {
     }
 }
 
+bool controller_owns_pad() {
+    return private_pad();
+}
+
 void controller_shutdown() {
     restore_lightbar();
     if (g_lastPad != nullptr && sdl.SendGamepadEffect != nullptr) {
         u32 vid = 0, pid = 0;
         PADGetVidPid(0, &vid, &pid);
-        SDL_Gamepad* pad = PADGetIndexForPort(0) >= 0
-                               ? PADGetSDLGamepadForIndex(PADGetIndexForPort(0))
-                               : nullptr;
-        if (pad == g_lastPad && is_dualsense(vid, pid)) {
+        SDL_Gamepad* pad = private_pad()                 ? g_ownPad
+                           : PADGetIndexForPort(0) >= 0 ? PADGetSDLGamepadForIndex(PADGetIndexForPort(0))
+                                                        : nullptr;
+        if (pad == g_lastPad && (private_pad() || is_dualsense(vid, pid))) {
             Ds5Effects fx = {};
             const Trigger off = trigger_off();
             fx.enableBits1 = 0x04 | 0x08;
@@ -418,6 +520,14 @@ void controller_shutdown() {
             sdl.SendGamepadEffect(pad, &fx, sizeof(fx));
         }
     }
+    if (g_ownPad != nullptr) {
+        if (g_rumbling) {
+            sdl.RumbleGamepad(g_ownPad, 0, 0, 0);
+        }
+        sdl.CloseGamepad(g_ownPad);
+        g_ownPad = nullptr;
+    }
+    g_rumbling = false;
     g_lastPad = nullptr;
     g_sentOnce = false;
     g_ownTriggers = g_ownPadLights = g_ownMic = false;

@@ -44,9 +44,17 @@ the controller's audio device.
 
 ## Platform notes
 
-- **Linux:** fully supported. The mod uses the game's own SDL through its exported symbols.
-- **Windows and macOS:** untested. The game does not export SDL there, so trigger, player LED and
-  mic LED effects are disabled, while the lightbar still works through Aurora's `PADSetColor`.
-  Audio falls back to a system `SDL3` library if one can be loaded. On Windows, sound-driven
-  haptics are compiled out because the engine's `DuskDsp.hpp` globals are not marked
-  `DUSK_GAME_DATA`. The buzz rumble still works.
+- **Linux:** the mod uses the game's own SDL through its exported symbols.
+- **Windows/macOS** (untested): the game doesn't export SDL there. Instead the mod ships its own
+  SDL3 library and runs a private SDL instance that opens only the DualSense, through HIDAPI with
+  every other backend and driver disabled. Triggers, LEDs, the lightbar, rumble and the haptics
+  audio all go through that instance. The game's own writes to the controller are blocked so the
+  two don't fight: `PADSetColor` on port 0, Dusklight's LED feature, and `PADControlMotor`.
+  - Windows: the build downloads `SDL3.dll` (3.4.10, VC) and packages it beside the mod.
+  - macOS: pass `-DDS_SDL3_RUNTIME=/path/to/libSDL3.0.dylib`. Otherwise the mod looks for a
+    system copy (e.g. Homebrew).
+  - On Windows the engine's audio globals are imported via `src/dsp_globals.hpp`, which
+    redeclares them `dllimport`. This assumes the game's export list includes them. If the
+    Windows link fails on `ChannelAux`, `MasterVolume` etc., that assumption is wrong.
+- `build/sdl_dyn_test` exercises the private-instance path on any OS:
+  `cmake --build build --target sdl_dyn_test && ./build/sdl_dyn_test`.

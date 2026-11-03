@@ -24,12 +24,39 @@ if (NOT SDL3_INCLUDE_DIR)
     set(SDL3_INCLUDE_DIR "${sdl3_headers_SOURCE_DIR}/include")
 endif ()
 
+# Windows/macOS: the game doesn't export SDL, so the mod ships its own SDL3 library and runs a
+# private instance for the DualSense (see src/sdl_dyn.hpp). Linux uses the game's SDL.
+set(DS_SDL3_RUNTIME "" CACHE FILEPATH "SDL3 shared library to ship beside the mod (Windows/macOS)")
+if (WIN32 AND NOT DS_SDL3_RUNTIME)
+    include(FetchContent)
+    FetchContent_Declare(sdl3_vc
+            URL https://github.com/libsdl-org/SDL/releases/download/release-3.4.10/SDL3-devel-3.4.10-VC.zip
+            DOWNLOAD_EXTRACT_TIMESTAMP FALSE
+            SOURCE_SUBDIR no-build)
+    FetchContent_MakeAvailable(sdl3_vc)
+    string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" _ds_arch)
+    if (_ds_arch MATCHES "arm64|aarch64")
+        set(_ds_arch arm64)
+    else ()
+        set(_ds_arch x64)
+    endif ()
+    set(DS_SDL3_RUNTIME "${sdl3_vc_SOURCE_DIR}/lib/${_ds_arch}/SDL3.dll")
+elseif (APPLE AND NOT DS_SDL3_RUNTIME)
+    message(WARNING "DS_SDL3_RUNTIME not set: the mod will look for a system libSDL3 (e.g. Homebrew) "
+            "at runtime. Pass -DDS_SDL3_RUNTIME=/path/to/libSDL3.0.dylib to ship one.")
+endif ()
+set(_ds_runtime_args)
+if (DS_SDL3_RUNTIME)
+    set(_ds_runtime_args RUNTIME_LIBRARIES "${DS_SDL3_RUNTIME}")
+endif ()
+
 configure_file(mod.json.in "${CMAKE_CURRENT_BINARY_DIR}/mod.json" @ONLY NEWLINE_STYLE LF)
 
 add_mod(dualsense_mod
         FEATURES game fmt
         SOURCES src/mod.cpp src/settings.cpp src/haptics.cpp src/controller.cpp src/sdl_dyn.cpp
         MOD_JSON "${CMAKE_CURRENT_BINARY_DIR}/mod.json"
+        ${_ds_runtime_args}
 )
 # DuskDsp.hpp (audio engine internals) lives under src/.
 target_include_directories(dualsense_mod PRIVATE "${SDL3_INCLUDE_DIR}" "${DUSKLIGHT_DIR}/src")
@@ -39,3 +66,7 @@ endif ()
 
 add_executable(ds5_test EXCLUDE_FROM_ALL tests/ds5_test.cpp)
 target_include_directories(ds5_test PRIVATE src)
+
+add_executable(sdl_dyn_test EXCLUDE_FROM_ALL tests/sdl_dyn_test.cpp src/sdl_dyn.cpp)
+target_include_directories(sdl_dyn_test PRIVATE src "${SDL3_INCLUDE_DIR}")
+target_link_libraries(sdl_dyn_test PRIVATE ${CMAKE_DL_LIBS})

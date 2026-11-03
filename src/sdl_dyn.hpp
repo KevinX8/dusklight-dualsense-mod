@@ -1,20 +1,21 @@
-// The game links SDL3 statically. On Linux its symbols are exported from the executable, so we
-// resolve them from the host process at runtime. Windows/macOS do not export SDL, so gamepad
-// effects are unavailable there; audio falls back to a separately loaded SDL3 library (its own
-// instance, which is fine for opening the controller's audio device).
+// SDL access. The game links SDL3 statically:
+// - Linux exports its SDL symbols, so we use the game's own instance (and its gamepad handle).
+// - Windows/macOS do not, so we load our own SDL3 library (shipped beside the mod) and run a
+//   private instance that opens only the DualSense through HIDAPI. The game's own writes to the
+//   controller (LED, rumble) are then blocked by hooks so the two instances never fight.
 #pragma once
 
 #include <SDL3/SDL_audio.h>
 #include <SDL3/SDL_gamepad.h>
+#include <SDL3/SDL_hints.h>
 #include <SDL3/SDL_init.h>
 
 namespace ds {
 
 struct SdlApi {
-    // Host instance only (the gamepad handle belongs to the game's SDL).
     decltype(&SDL_SendGamepadEffect) SendGamepadEffect = nullptr;
 
-    // Audio: host instance, or a standalone SDL3 library when the host does not export it.
+    // Audio
     decltype(&SDL_InitSubSystem) InitSubSystem = nullptr;
     decltype(&SDL_QuitSubSystem) QuitSubSystem = nullptr;
     decltype(&SDL_GetAudioPlaybackDevices) GetAudioPlaybackDevices = nullptr;
@@ -28,14 +29,27 @@ struct SdlApi {
     decltype(&SDL_DestroyAudioStream) DestroyAudioStream = nullptr;
     decltype(&SDL_free) Free = nullptr;
 
-    bool audio_is_host = false;
+    // Private gamepad instance (own_gamepad only)
+    decltype(&SDL_Quit) Quit = nullptr;
+    decltype(&SDL_SetHint) SetHint = nullptr;
+    decltype(&SDL_GetGamepads) GetGamepads = nullptr;
+    decltype(&SDL_GetGamepadVendorForID) GetGamepadVendorForID = nullptr;
+    decltype(&SDL_GetGamepadProductForID) GetGamepadProductForID = nullptr;
+    decltype(&SDL_OpenGamepad) OpenGamepad = nullptr;
+    decltype(&SDL_CloseGamepad) CloseGamepad = nullptr;
+    decltype(&SDL_GamepadConnected) GamepadConnected = nullptr;
+    decltype(&SDL_UpdateGamepads) UpdateGamepads = nullptr;
+    decltype(&SDL_RumbleGamepad) RumbleGamepad = nullptr;
+
+    bool own_gamepad = false;  // gamepad effects go through our private instance
     bool has_audio() const { return OpenAudioDeviceStream != nullptr; }
 };
 
 extern SdlApi sdl;
 
-// Resolves everything it can. Returns a short description of where audio came from.
-const char* sdl_load();
+// native_dir: the mod's extracted lib directory (where a shipped SDL3 library lives).
+// Returns a short description of what was loaded.
+const char* sdl_load(const char* native_dir);
 void sdl_unload();
 
 }  // namespace ds

@@ -8,5 +8,7 @@ namespace ds {
 ModResult controller_init(ModError* error);
 void controller_update();
 void controller_shutdown();
+// True when our private SDL instance drives the DualSense (Windows/macOS).
+bool controller_owns_pad();
 
 }  // namespace ds

@@ -63,8 +63,12 @@ std::unordered_map<const JASChannel*, ChanInfo> g_chanInfo;
 
 void on_se_start_id(ModContext*, void* args, void*, void*) {
     JAISe* se = mods::arg<JAISe*>(args, 0);
+    const u32 id = static_cast<u32>(se->getID());
+    if (opt_on(LogSounds)) {
+        mods::log::info("SE start 0x{:05X} (group {})", id, (id >> 16) & 0xFF);
+    }
     std::lock_guard lock(g_mapMutex);
-    g_seTracks[&se->inner_.track] = static_cast<u32>(se->getID());
+    g_seTracks[&se->inner_.track] = id;
 }
 
 void on_channel_start(ModContext*, void* args, void* retval, void*) {
@@ -152,6 +156,7 @@ int g_saveCount = 0;
 // Diagnostics shown in the mods panel: voices attributed this second and output peaks.
 std::atomic<int> g_dbgRenders = 0;
 std::atomic<int> g_dbgClears = 0;
+std::atomic<int> g_dbgUnattributed = 0;
 std::atomic<int> g_dbgHaptic = 0, g_dbgSpeaker = 0, g_dbgTracked = 0;
 std::atomic<float> g_dbgHapticPeak = 0.0f, g_dbgSpeakerPeak = 0.0f;
 template <class T>
@@ -239,6 +244,7 @@ void shadow_render(float* hl, float* hr, float* sl, float* sr) {
             const auto* channel = static_cast<const JASChannel*>(dsp[i].mCallbackData);
             const auto it = g_chanInfo.find(channel);
             if (it == g_chanInfo.end() || channel->mCallbackData != it->second.mgr) {
+                g_dbgUnattributed.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
             const float hg = haptics ? category_gain(it->second.soundId) * master : 0.0f;
@@ -588,6 +594,10 @@ void haptics_update() {
         } else {
             g_stallWarned = false;
             settings_set_status(stats.c_str());
+        }
+        const int unattributed = g_dbgUnattributed.exchange(0);
+        if (opt_on(LogSounds)) {
+            mods::log::info("voice-subframes not matched to a sound effect: {}", unattributed);
         }
         if (++g_statsLogCount % 10 == 0) {
             mods::log::info("{}", stats);  // every ~10 s, for remote diagnosis

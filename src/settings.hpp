@@ -28,6 +28,7 @@ enum Opt : int {
     RumbleMode,
     BuzzStrength,
     BuzzFreq,
+    LogSounds,
     // Speaker
     SpeakerEnabled,
     SpeakerVolume,

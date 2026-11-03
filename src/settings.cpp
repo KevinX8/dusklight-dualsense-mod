@@ -61,7 +61,7 @@ const Def kDefs[OptCount] = {
     CAT(CatSystem, "catSystem", 0, "Menus & items"),
     CAT(CatPlayerVoice, "catPlayerVoice", 0, "Link's voice"),
     CAT(CatPlayerSe, "catPlayerSe", 100, "Link's actions (sword, items)"),
-    CAT(CatFootsteps, "catFootsteps", 60, "Footsteps & hooves"),
+    CAT(CatFootsteps, "catFootsteps", 100, "Footsteps & hooves"),
     CAT(CatCollision, "catCollision", 120, "Hits & impacts"),
     CAT(CatCharaVoice, "catCharaVoice", 0, "Character voices"),
     CAT(CatCharaSe, "catCharaSe", 40, "Character sounds"),
@@ -78,6 +78,8 @@ const Def kDefs[OptCount] = {
      "Strength of the haptic buzz rumble.", 0, 200, 5, "%"},
     {"buzzFreq", Int, 70, nullptr, TabHaptics, nullptr, "Buzz frequency",
      "Lower feels like a rumble, higher like a buzz.", 20, 300, 5, " Hz"},
+    {"logSounds", Bool, 0, nullptr, TabHaptics, "Diagnostics", "Log sound effects",
+     "Writes every sound effect ID to the log, to find sounds that should (or shouldn't) be felt."},
 
     {"speakerEnabled", Bool, 1, nullptr, TabSpeaker, "Controller speaker",
      "Controller speaker",

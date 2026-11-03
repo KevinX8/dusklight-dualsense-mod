@@ -87,6 +87,7 @@ jobs:
           name: mod-${{matrix.platform}}
           path: build/mods/*.dusk
           if-no-files-found: error
+          retention-days: 1
 
   combine:
     name: Combine bundles
@@ -94,6 +95,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      actions: write
     steps:
       - uses: actions/checkout@v7
 
@@ -111,16 +113,24 @@ jobs:
 
       - name: Merge bundles
         run: |
-          name=$(basename dist/mod-linux-x86_64/*.dusk)
-          python3 tools/merge_mod.py -o "combined/$name" --symgen ./symgen dist/*/*.dusk
-          unzip -l "combined/$name"
+          python3 tools/merge_mod.py -o combined/dualsense_mod.dusk --symgen ./symgen dist/*/*.dusk
+          unzip -l combined/dualsense_mod.dusk
 
+      # Uploaded unzipped: the download is the .dusk itself, with every platform inside.
       - name: Upload combined bundle
         uses: actions/upload-artifact@v7
         with:
-          name: dualsense_mod
-          path: combined/*.dusk
+          path: combined/dualsense_mod.dusk
+          archive: false
           if-no-files-found: error
+
+      - name: Delete per-platform intermediates
+        env:
+          GH_TOKEN: ${{github.token}}
+        run: |
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select(.name | startswith("mod-")) | .id' |
+            xargs -r -I{} gh api -X DELETE "repos/${GITHUB_REPOSITORY}/actions/artifacts/{}"
 
       - name: Attach to release
         if: startsWith(github.ref, 'refs/tags/')

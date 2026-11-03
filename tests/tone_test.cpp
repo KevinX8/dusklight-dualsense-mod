@@ -1,5 +1,6 @@
 // Hardware check without the game: finds the DualSense audio device like the mod does and plays
 // a 1 s 440 Hz tone on the speaker (ch 1/2), then a 1 s 120 Hz buzz on the actuators (ch 3/4).
+#include "ds5.hpp"
 #include "sdl_dyn.hpp"
 
 #include <cmath>
@@ -14,6 +15,24 @@ int main() {
         return 1;
     }
     int count = 0;
+    // Enable the controller's audio path first (same report the mod sends).
+    if (ds::sdl.own_gamepad) {
+        ds::sdl.UpdateGamepads();
+        SDL_JoystickID* pads = ds::sdl.GetGamepads(&count);
+        for (int i = 0; i < count; ++i) {
+            if (ds::sdl.GetGamepadVendorForID(pads[i]) == 0x054C) {
+                if (SDL_Gamepad* pad = ds::sdl.OpenGamepad(pads[i])) {
+                    ds::Ds5Effects fx{};
+                    fx.enableBits1 = 0x10 | 0x20 | 0x80;
+                    fx.headphoneVolume = 0x70;
+                    fx.speakerVolume = 0x54;
+                    std::printf("audio enable report: %s\n",
+                        ds::sdl.SendGamepadEffect(pad, &fx, sizeof(fx)) ? "sent" : "FAILED");
+                }
+            }
+        }
+        ds::sdl.Free(pads);
+    }
     SDL_AudioDeviceID* ids = ds::sdl.GetAudioPlaybackDevices(&count);
     SDL_AudioDeviceID found = 0;
     for (int i = 0; i < count; ++i) {

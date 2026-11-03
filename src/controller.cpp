@@ -375,7 +375,7 @@ u8 fill_leds(float fraction) {
 // What the controller currently has, per effect group. Each report only carries the groups that
 // changed: re-sending a trigger effect restarts its motor, which is audible.
 struct SentState {
-    bool trig = false, pad = false, mic = false, led = false;
+    bool trig = false, pad = false, mic = false, led = false, audio = false;
     Trigger left{}, right{};
     u8 padLights = 0, micMode = 0, rgb[3] = {};
 };
@@ -471,6 +471,16 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
         fx.ledBlue = g_reportRgb[2];
     }
 
+    // The controller ignores its audio inputs (speaker and haptic channels) until the host enables
+    // audio control and sets the output volumes. Values match DSX's USB haptics setup.
+    const bool audio = haptics_stream_open();
+    if (audio && (reassert || !g_sent.audio)) {
+        fx.enableBits1 |= 0x10 | 0x20 | 0x80;  // headphone volume, speaker volume, audio control
+        fx.headphoneVolume = 0x70;
+        fx.speakerVolume = 0x54;
+        fx.audioEnableBits = 0x00;  // output path: channels 1/2 to headphones/speaker
+    }
+
     if (reassert) {
         g_resendFrames = 180;  // re-assert LEDs (never triggers) in case SDL reset them
     }
@@ -486,6 +496,9 @@ void update_effects(daAlink_c* link, double t, SDL_Gamepad* pad) {
         g_sent.trig = g_ownTriggers;
         std::memcpy(g_sent.left.data(), fx.leftTrigger, g_sent.left.size());
         std::memcpy(g_sent.right.data(), fx.rightTrigger, g_sent.right.size());
+    }
+    if (fx.enableBits1 & 0x80) {
+        g_sent.audio = true;
     }
     if (fx.enableBits2 & 0x10) {
         g_sent.pad = true;

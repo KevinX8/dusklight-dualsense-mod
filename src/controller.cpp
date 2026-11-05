@@ -286,12 +286,12 @@ bool proc_in(u16 proc, std::initializer_list<int> procs) {
 }
 
 void choose_triggers(daAlink_c* link, Trigger& left, Trigger& right) {
-    left = trigger_off();
-    right = trigger_off();
+    const float scale = static_cast<float>(opt(TriggerStrength)) / 100.0f;
+    left = right = opt_on(TrigGameCube) ? trigger_gamecube(static_cast<uint8_t>(std::lround(255 * scale)))
+                                        : trigger_off();
     if (link == nullptr) {
         return;
     }
-    const float scale = static_cast<float>(opt(TriggerStrength)) / 100.0f;
     const auto s = [scale](int strength) {
         return std::max(1, static_cast<int>(std::lround(strength * scale)));
     };

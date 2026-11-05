@@ -61,6 +61,7 @@ enum Opt : int {
     // Triggers
     TriggersEnabled,
     TriggerStrength,
+    TrigGameCube,
     TrigLockOn,
     TrigShield,
     TrigBoots,

@@ -44,6 +44,16 @@ inline Trigger trigger_off() {
     return t;
 }
 
+// DSX "GameCube": legacy section mode, a wall between 144 and 160 like the GC's analog-to-digital click.
+inline Trigger trigger_gamecube(uint8_t force = 0xFF) {
+    Trigger t{};
+    t[0] = 0x02;
+    t[1] = 0x90;
+    t[2] = 0xA0;
+    t[3] = force;
+    return t;
+}
+
 inline Trigger zones_packed(uint8_t mode, const std::array<uint8_t, 10>& strengths, uint8_t freq) {
     Trigger t{};
     t[0] = mode;

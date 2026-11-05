@@ -15,6 +15,10 @@ int main() {
     Trigger off = trigger_off();
     assert(off[0] == 0x05 && off[1] == 0);
 
+    // DSX Windows ControllerDevice.cs, TriggerType.GAMECUBE.
+    Trigger gc = trigger_gamecube();
+    assert(gc[0] == 2 && gc[1] == 144 && gc[2] == 160 && gc[3] == 255 && gc[4] == 0 && gc[10] == 0);
+
     // Feedback from zone 2, strength 2: zones 2..9 active, each packed (2-1)=1.
     Trigger fb = trigger_feedback(2, 2);
     assert(fb[0] == 0x21 && fb[1] == 0xFC && fb[2] == 0x03);

@@ -12,7 +12,7 @@ DualSense effects for Dusklight over **USB**. Every effect can be changed in
 | Midna's Lament | While Midna is gravely hurt (the Lament music, or the story stretch from Zant's ambush to her revival), the lightbar breathes slowly and unevenly in her teal with orange ember flickers, and the center player LED beats like a faint heartbeat. | On/off, both colors |
 | Player LEDs | Show hearts or lantern oil on the five LEDs. | Off / hearts / oil |
 | Mic LED | Pulses while Midna is calling. | On/off |
-| Adaptive triggers | Target lock (L2). Shield weight and guard (R2). Iron Boots (both triggers). Bow tension and snap. Slingshot. A click when aiming the clawshot or boomerang. Fishing reel. Epona's gallop (L2). Spin-attack charge. | On/off, strength, a toggle for each effect |
+| Adaptive triggers | A GameCube-style click near full press when nothing else is active (DSX's GameCube mode). Target lock (L2). Shield weight and guard (R2). Iron Boots (both triggers). Bow tension and snap. Slingshot. A click when aiming the clawshot or boomerang. Fishing reel. Epona's gallop (L2). Spin-attack charge. | On/off, strength, a toggle for each effect |
 
 ## Requirements
 

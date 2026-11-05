@@ -152,6 +152,9 @@ const Def kDefs[OptCount] = {
      "R2 = R (shield)."},
     {"triggerStrength", Int, 100, nullptr, TabTriggers, nullptr, "Trigger strength",
      "Scales every trigger effect.", 10, 100, 10, "%"},
+    {"trigGameCube", Bool, 1, nullptr, TabTriggers, nullptr, "GameCube click (default)",
+     "When no other effect is active, both triggers end in a GameCube-style click near full "
+     "press (DSX's GameCube mode)."},
     {"trigLockOn", Bool, 1, nullptr, TabTriggers, "Effects", "Target lock (L2)",
      "Firm resistance while locked onto a target."},
     {"trigShield", Bool, 1, nullptr, TabTriggers, nullptr, "Shield weight (R2)",

@@ -7,7 +7,7 @@ if (NOT DEFINED CMAKE_BUILD_TYPE AND NOT DEFINED ENV{CMAKE_BUILD_TYPE})
     set(CMAKE_BUILD_TYPE "RelWithDebInfo" CACHE STRING "Build type")
 endif ()
 
-project(dualsense_mod VERSION 1.0.0 LANGUAGES CXX)
+project(dualsense_mod VERSION 1.0.1 LANGUAGES CXX)
 
 # Dusklight commit the mod builds against when no local checkout is given (-DDUSKLIGHT_DIR=...).
 if (NOT DUSKLIGHT_VERSION)
